@@ -22,6 +22,62 @@ The codebase actually contains **two data models living side by side**:
    feature engineering → ML attribution (Random Forest + SHAP) → root-cause interpretation →
    MCDA-ranked reduction recommendations. This is what the main Dashboard page now runs against.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    User["User (Browser)"]
+
+    subgraph FE["Frontend — Next.js 16 (App Router)"]
+        Landing["Landing Page ( / )"]
+        FacilityCtx["FacilityContext<br/>selected factory · persisted to localStorage"]
+        Dashboard["Dashboard ( /dashboard )<br/>date range + Run analysis"]
+        Pages["Circular-economy pages<br/>Hotspots · Streams · Partners · Pathways ·<br/>Allocations · Traceability · Verified Outcomes"]
+        ApiClient["lib/api-client.js"]
+        DemoData["lib/demo-data/*<br/>offline fallback dataset"]
+    end
+
+    subgraph BE["Backend — FastAPI"]
+        AnalysisRoutes["analysis_routes.py<br/>POST /factories/{id}/analyze<br/>GET contribution · features · recommendations"]
+        DashboardRoutes["dashboard_routes.py<br/>summary · trend · scope · hotspots"]
+        CircularRoutes["circular_routes.py<br/>streams · partners · pathways ·<br/>allocations · traceability · evidence"]
+        MetadataRoutes["metadata_routes.py<br/>emission-factors · data-sources · settings · simulator"]
+        Pipeline["Analysis Pipeline (analysis/*.py)<br/>emission calc → source contribution →<br/>feature engineering (pandas/NumPy) →<br/>ML attribution (RandomForest + SHAP) →<br/>MCDA-ranked recommendation"]
+    end
+
+    DB[("PostgreSQL<br/>(Supabase)")]
+
+    User -->|opens| Landing
+    Landing -->|Open Dashboard| Dashboard
+    Dashboard --> FacilityCtx
+    FacilityCtx -->|selected factory ID| ApiClient
+    Dashboard --> ApiClient
+    User -->|navigates sidebar| Pages
+    Pages --> ApiClient
+
+    ApiClient -->|REST · JSON| AnalysisRoutes
+    ApiClient --> DashboardRoutes
+    ApiClient --> CircularRoutes
+    ApiClient --> MetadataRoutes
+    ApiClient -.->|on fetch failure| DemoData
+
+    AnalysisRoutes -->|runs| Pipeline
+    Pipeline -->|reads measurements ·<br/>writes emission_records,<br/>contribution_analyses, recommendations| DB
+    DashboardRoutes --> DB
+    CircularRoutes --> DB
+    MetadataRoutes --> DB
+```
+
+- **Two facility datasets, one UI**: the sidebar's facility selector lists the real factories from
+  `/factories` (backed by `metric_definitions`/`measurements`); the circular-economy pages
+  (streams, hotspots, partners) query separate tables seeded for the three demo facilities.
+- **Every frontend request goes through `api-client.js`**, which falls back to bundled demo data
+  on any network failure so the UI never shows a blank page.
+- **`POST /factories/{id}/analyze` is the only endpoint that computes rather than reads** — it's a
+  genuine 15–60s pipeline run (emission calculation → SHAP attribution → MCDA ranking) that writes
+  its results back to Postgres; the other `analysis_routes.py` `GET` endpoints just read the latest
+  stored result.
+
 ## Repository structure
 
 ```
