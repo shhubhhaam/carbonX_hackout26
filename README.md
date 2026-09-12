@@ -1,5 +1,10 @@
 # CarbonX — Industrial Circular Carbon Intelligence Platform
 
+<p align="center">
+  <img src="SS/landingpage.png" alt="CarbonX landing page" width="49%" />
+  <img src="SS/dashboard.png" alt="CarbonX dashboard" width="49%" />
+</p>
+
 CarbonX helps industrial facilities measure emissions, find circular-economy opportunities for
 their byproducts, match with off-take partners, and verify the impact of what they ship. It's a
 FastAPI + PostgreSQL (Supabase) backend paired with a Next.js dashboard.
@@ -177,8 +182,108 @@ If the backend is unreachable, every page falls back to bundled demo data
 
 ## Tech stack
 
-**Backend:** FastAPI, psycopg2, PostgreSQL (Supabase), pandas/numpy, scikit-learn + SHAP for ML
-attribution.
+### Backend
 
-**Frontend:** Next.js 16 (App Router), React 19, Recharts, Leaflet/react-leaflet, lucide-react
-icons, Radix UI primitives, Tailwind 4.
+| Layer | Technology | Purpose |
+|---|---|---|
+| Language | **Python 3.14** | |
+| Web framework | **FastAPI** 0.141 | REST API, routing, request validation |
+| ASGI server | **Uvicorn** 0.52 | Serves the FastAPI app |
+| Database | **PostgreSQL** (hosted on **Supabase**) | Primary datastore, multi-tenant schema |
+| DB driver | **psycopg2-binary** 2.9 | Raw SQL access from Python |
+| Validation | **Pydantic** 2.13 | Request/response models |
+| Config | **python-dotenv** 1.2 | Loads `.env` credentials |
+| Data processing | **pandas** 3.0, **NumPy** 2.5 | Feature engineering over measurement time series |
+| Machine learning | **scikit-learn** 1.9 (`RandomForestRegressor`) | Emission-driver attribution model |
+| Explainability | **SHAP** 0.52 | Feature-importance attribution (TreeExplainer) |
+| Testing | **FastAPI `TestClient`** / **httpx** | API endpoint tests (`backend/tests/`) |
+
+### Frontend
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Framework | **Next.js 16** (App Router, Turbopack) | Routing, SSR/CSR, dev server, build |
+| UI library | **React 19** | Component model |
+| Styling | **Tailwind CSS 4** (`@tailwindcss/postcss`) | Utility-first styling |
+| Component primitives | **Radix UI** (`react-dialog`, `react-select`, `react-slider`, `react-tabs`, `react-tooltip`) | Accessible unstyled UI primitives |
+| Styling utilities | **class-variance-authority**, **clsx**, **tailwind-merge** | Conditional/merged className composition |
+| Charts | **Recharts 3** | Trend, donut, and bar charts on the dashboard |
+| Maps | **Leaflet 1.9** + **react-leaflet 5** + **OpenStreetMap** tiles | Real geographic facility/partner map |
+| Icons | **lucide-react** | Icon set used throughout the UI |
+| Fonts | **Geist / Geist Mono** (via `next/font`) | App typography |
+| Linting | **ESLint 9** + **eslint-config-next** | Code quality checks (`npm run lint`) |
+
+### Infrastructure / tooling
+
+| Technology | Purpose |
+|---|---|
+| **Supabase** | Managed Postgres + connection pooling for the database |
+| **npm** | Frontend package management |
+| **pip** | Backend package management (`requirements.txt`) |
+| **Git** | Version control |
+
+## Screenshots
+
+### 1. Facilities
+
+![Facilities](SS/1.png)
+
+### 2. Data Intake & Ingestion
+
+![Data Intake & Ingestion](SS/2.png)
+
+### 3. Carbon Baseline & Science-Based Targets
+
+![Carbon Baseline & Science-Based Targets](SS/3.png)
+
+### 4. Emissions Accounting Ledger
+
+![Emissions Accounting Ledger](SS/4.png)
+
+### 5. Hotspot Explorer
+
+![Hotspot Explorer](SS/5.png)
+
+### 6. Industrial Symbiosis & Partner Matching
+
+![Industrial Symbiosis & Partner Matching](SS/6.png)
+
+### 7. Geospatial Network & Transit Corridors
+
+![Geospatial Network & Transit Corridors](SS/7.png)
+
+### 8. Stream Allocations & Offtake Contracts
+
+![Stream Allocations & Offtake Contracts](SS/8.png)
+
+### 9. Digital Product & Byproduct Passports (DPP)
+
+![Digital Product & Byproduct Passports](SS/9.png)
+
+### 10. Byproduct Lifecycle Traceability & Audit Trail
+
+![Byproduct Lifecycle Traceability & Audit Trail](SS/10.png)
+
+### 11. Evidence Locker & Chain of Custody Proofs
+
+![Evidence Locker & Chain of Custody Proofs](SS/11.png)
+
+### 12. Verified Outcomes & Avoidance Assurance
+
+![Verified Outcomes & Avoidance Assurance](SS/12.png)
+
+### 13. Emission Factor Database
+
+![Emission Factor Database](SS/13.png)
+
+### 14. Circular Partners & Off-takers Directory
+
+![Circular Partners & Off-takers Directory](SS/14.png)
+
+### 15. Automated Data Sources & Telemetry
+
+![Automated Data Sources & Telemetry](SS/15.png)
+
+### 16. Platform & Workspace Settings
+
+![Platform & Workspace Settings](SS/16.png)
