@@ -55,7 +55,7 @@ class ContributionAnalyzer:
             cur.execute(
                 """
                 SELECT
-                    es.id as source_id,
+                    (ARRAY_AGG(es.id ORDER BY es.id))[1] as source_id,
                     es.name as source_name,
                     es.source_category,
                     SUM(er.emission_value) as total_emission,
@@ -67,7 +67,7 @@ class ContributionAnalyzer:
                   AND er.emission_type_id = %s
                   AND er.period_start < %s
                   AND er.period_end > %s
-                GROUP BY es.id, es.name, es.source_category, er.emission_unit
+                GROUP BY es.name, es.source_category, er.emission_unit
                 ORDER BY total_emission DESC;
                 """,
                 (factory_id, et_id, period_end, period_start)

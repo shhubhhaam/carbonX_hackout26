@@ -11,12 +11,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from psycopg2.extras import RealDictCursor
 
 from storage_service import DataStorageService
 from api.routes.analysis_routes import router as analysis_router
+from api.routes.auth_routes import router as auth_router
 from api.routes.circular_routes import router as circular_router
 from api.routes.dashboard_routes import router as dashboard_router
 from api.routes.metadata_routes import router as metadata_router
+from api.routes.auth_routes import get_current_user
+from fastapi import Request, Depends
 
 load_dotenv()
 
@@ -40,6 +44,7 @@ app.add_middleware(
 
 # Mount all platform routes
 app.include_router(analysis_router)
+app.include_router(auth_router)
 app.include_router(circular_router)
 app.include_router(dashboard_router)
 app.include_router(metadata_router)
@@ -178,8 +183,57 @@ def create_factory(payload: FactoryCreateRequest):
 
 
 @app.get("/api/v1/factories", tags=["Factories"])
-def list_factories(organization_id: Optional[str] = None):
-    factories = service.list_factories(organization_id)
+def list_factories(
+    organization_id: Optional[str] = None,
+    request: Request = None,
+):
+    """List only factories visible to the caller that contain measurements."""
+    conn = service.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            auth_header = request.headers.get("Authorization", "") if request else ""
+            if auth_header.lower().startswith("bearer "):
+                user = get_current_user(request)
+                cur.execute(
+                    """
+                    SELECT DISTINCT f.*
+                    FROM factories f
+                    JOIN user_organization_roles uor ON uor.organization_id = f.organization_id
+                                        JOIN roles assigned_role ON assigned_role.id = uor.role_id
+                                        JOIN organizations org ON org.id = f.organization_id
+                    WHERE uor.user_id = %s
+                      AND (uor.expires_at IS NULL OR uor.expires_at > NOW())
+                                            AND (
+                                                (uor.factory_id IS NULL OR uor.factory_id = f.id)
+                                                OR (
+                                                    assigned_role.name = 'INDUSTRY_REGULATOR'
+                                                    AND EXISTS (
+                                                        SELECT 1 FROM user_jurisdictions uj
+                                                        WHERE uj.user_id = %s
+                                                            AND lower(uj.jurisdiction) = lower(COALESCE(org.settings->>'jurisdiction', org.country))
+                                                    )
+                                                )
+                                            )
+                      AND (%s IS NULL OR f.organization_id = %s)
+                      AND EXISTS (SELECT 1 FROM measurements m WHERE m.factory_id = f.id)
+                    ORDER BY f.name;
+                    """,
+                                        (user.id, user.id, organization_id, organization_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT DISTINCT f.*
+                    FROM factories f
+                    WHERE (%s IS NULL OR f.organization_id = %s)
+                      AND EXISTS (SELECT 1 FROM measurements m WHERE m.factory_id = f.id)
+                    ORDER BY f.name;
+                    """,
+                    (organization_id, organization_id),
+                )
+            factories = [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
     return {"status": "success", "count": len(factories), "data": factories}
 
 
@@ -189,6 +243,38 @@ def get_factory(code_or_id: str):
     if not factory:
         raise HTTPException(status_code=404, detail="Factory not found")
     return {"status": "success", "data": factory}
+
+
+@app.get("/api/v1/factories/{factory_id}/emissions", tags=["Emissions"])
+def get_factory_emissions(factory_id: str, limit: int = Query(1000, ge=1, le=5000)):
+    """Retrieve calculated emission records stored for a factory."""
+    conn = service.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT er.id, er.factory_id, er.measurement_id,
+                       er.period_start, er.period_end, er.activity_value,
+                       er.activity_unit, er.emission_value, er.emission_unit,
+                       er.calculation_method, er.is_estimated,
+                       es.name AS source_name, es.source_category,
+                       et.name AS emission_type_name,
+                       md.name AS metric_name
+                FROM emission_records er
+                JOIN emission_sources es ON es.id = er.emission_source_id
+                JOIN emission_types et ON et.id = er.emission_type_id
+                LEFT JOIN measurements m ON m.id = er.measurement_id
+                LEFT JOIN metric_definitions md ON md.id = m.metric_definition_id
+                WHERE er.factory_id = %s
+                ORDER BY er.period_start DESC
+                LIMIT %s;
+                """,
+                (factory_id, limit)
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+        return {"status": "success", "count": len(rows), "data": rows}
+    finally:
+        conn.close()
 
 
 # -----------------------------------------------------------------------------

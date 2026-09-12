@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Target,
   TrendingDown,
@@ -20,6 +20,8 @@ import MetricCard from "@/components/ui/MetricCard";
 import StatusBadge from "@/components/ui/StatusBadge";
 import DemoDisclaimer from "@/components/ui/DemoDisclaimer";
 import ScoreBar from "@/components/ui/ScoreBar";
+import { getFactoryEmissionRecords } from "@/lib/api-client";
+import { useFacility } from "@/lib/FacilityContext";
 import {
   AreaChart,
   Area,
@@ -32,55 +34,36 @@ import {
   Legend,
 } from "recharts";
 
-const TRAJECTORY_DATA = [
-  { year: "2023 (Base)", actual: 18420, target: 18420, bau: 18420 },
-  { year: "2024", actual: 16100, target: 17100, bau: 19200 },
-  { year: "2025 (Current)", actual: 13950, target: 15780, bau: 20100 },
-  { year: "2026", actual: null, target: 14460, bau: 21000 },
-  { year: "2027", actual: null, target: 13150, bau: 21950 },
-  { year: "2028", actual: null, target: 11840, bau: 22900 },
-  { year: "2029", actual: null, target: 10525, bau: 23900 },
-  { year: "2030", actual: null, target: 9210, bau: 25000 },
-];
-
-const FACILITY_TARGETS = [
-  {
-    id: "GIF-001",
-    name: "Gujarat Industrial Facility",
-    sector: "Agro-processing",
-    baseEmissions: 10500,
-    currentEmissions: 8426,
-    target2030: 5250,
-    reduction: -19.7,
-    status: "on-track",
-    budgetShare: "57%",
-  },
-  {
-    id: "PCP-003",
-    name: "Pune Chemical Park",
-    sector: "Specialty Chemicals",
-    baseEmissions: 7200,
-    currentEmissions: 6180,
-    target2030: 3600,
-    reduction: -14.1,
-    status: "requires-review",
-    budgetShare: "39%",
-  },
-  {
-    id: "MBP-002",
-    name: "Mumbai Bioprocessing Plant",
-    sector: "Biotechnology",
-    baseEmissions: 4100,
-    currentEmissions: 3210,
-    target2030: 2050,
-    reduction: -21.7,
-    status: "on-track",
-    budgetShare: "22%",
-  },
-];
-
 export default function CarbonBaselinePage() {
+  const { facilities } = useFacility();
   const [targetPace, setTargetPace] = useState("1.5c");
+  const [facilityTotals, setFacilityTotals] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadTotals() {
+      const results = await Promise.all(facilities.map(async (facility) => ({
+        facility,
+        records: await getFactoryEmissionRecords(facility.id, 5000),
+      })));
+      if (!mounted) return;
+      setFacilityTotals(Object.fromEntries(results.map(({ facility, records }) => [
+        facility.id,
+        records.reduce((sum, record) => sum + Number(record.emission_value || 0) / 1000, 0),
+      ])));
+      setLoading(false);
+    }
+    loadTotals();
+    return () => { mounted = false; };
+  }, [facilities]);
+
+  const totalCurrent = Object.values(facilityTotals).reduce((sum, value) => sum + value, 0);
+  const liveTargets = facilities.map((facility) => ({
+    ...facility,
+    currentEmissions: facilityTotals[facility.id] || 0,
+  }));
+  const trajectoryData = totalCurrent ? [{ year: "Current", actual: Number(totalCurrent.toFixed(1)) }] : [];
 
   return (
     <>
@@ -107,7 +90,7 @@ export default function CarbonBaselinePage() {
       <div className="metrics-grid">
         <MetricCard
           label="Base Year Footprint (FY23)"
-          value="18,420"
+          value={totalCurrent.toLocaleString(undefined, { maximumFractionDigits: 1 })}
           unit="tCO₂e"
           trend="neutral"
           change="Audited & locked"
@@ -115,7 +98,7 @@ export default function CarbonBaselinePage() {
         />
         <MetricCard
           label="2030 Interim Target"
-          value="9,210"
+          value="—"
           unit="tCO₂e"
           trend="down"
           change="-50.0% net cut"
@@ -123,7 +106,7 @@ export default function CarbonBaselinePage() {
         />
         <MetricCard
           label="Achieved Reduction"
-          value="-24.2"
+          value="—"
           unit="%"
           trend="down"
           change="-4,470 tCO₂e vs base"
@@ -134,7 +117,7 @@ export default function CarbonBaselinePage() {
           value="1.5°C"
           unit="SBTi"
           trend="up"
-          change="Ahead of pace by 1,830 t"
+          change="Targets not configured"
           icon={CheckCircle2}
         />
       </div>
@@ -164,7 +147,7 @@ export default function CarbonBaselinePage() {
 
         <div style={{ padding: "16px 20px 24px" }}>
           <ResponsiveContainer width="100%" height={290}>
-            <AreaChart data={TRAJECTORY_DATA} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+            <AreaChart data={trajectoryData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
               <defs>
                 <linearGradient id="actualGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#355c45" stopOpacity={0.25} />
@@ -237,27 +220,28 @@ export default function CarbonBaselinePage() {
             </tr>
           </thead>
           <tbody>
-            {FACILITY_TARGETS.map((f) => (
+            {loading ? (
+              <tr><td colSpan={8} style={{ padding: 32, textAlign: "center" }}>Loading facility emissions...</td></tr>
+            ) : liveTargets.map((f) => (
               <tr key={f.id}>
                 <td>
                   <Link href={`/facilities/${f.id}`} style={{ fontWeight: 600, color: "#355c45" }}>
                     {f.name}
                   </Link>
-                  <div style={{ fontSize: 11, color: "#667066" }}>ID: {f.id}</div>
+                  <div style={{ fontSize: 11, color: "#667066" }}>ID: {f.code || f.id}</div>
                 </td>
-                <td>{f.sector}</td>
-                <td>{f.baseEmissions.toLocaleString()} tCO₂e</td>
-                <td style={{ fontWeight: 600 }}>{f.currentEmissions.toLocaleString()} tCO₂e</td>
+                <td>{f.industry_type || "—"}</td>
+                <td>—</td>
+                <td style={{ fontWeight: 600 }}>{f.currentEmissions.toLocaleString(undefined, { maximumFractionDigits: 1 })} tCO₂e</td>
                 <td>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <ArrowDownRight size={14} color="#2e7d32" />
-                    <span style={{ fontWeight: 600, color: "#2e7d32" }}>{Math.abs(f.reduction)}%</span>
+                    <span style={{ color: "#667066" }}>—</span>
                   </div>
-                  <ScoreBar score={Math.round((f.currentEmissions / f.baseEmissions) * 100)} max={100} color="#355c45" />
+                  <ScoreBar score={0} max={100} color="#355c45" />
                 </td>
-                <td>{f.target2030.toLocaleString()} tCO₂e</td>
+                <td>—</td>
                 <td>
-                  <StatusBadge status={f.status} />
+                  <StatusBadge status={f.is_active === false ? "inactive" : "active"} />
                 </td>
                 <td>
                   <Link

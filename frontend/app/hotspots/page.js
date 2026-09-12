@@ -8,7 +8,6 @@ import StatusBadge from "@/components/ui/StatusBadge";
 import DemoDisclaimer from "@/components/ui/DemoDisclaimer";
 import { Panel } from "@/components/ui/Panel";
 import ScoreBar from "@/components/ui/ScoreBar";
-import { getHotspots as getLocalHotspots } from "@/lib/demo-data/index";
 import { getHotspots } from "@/lib/api-client";
 import { useFacility } from "@/lib/FacilityContext";
 
@@ -16,7 +15,7 @@ const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 
 export default function HotspotsPage() {
   const { selectedFacility } = useFacility();
-  const [hotspots, setHotspots] = useState(getLocalHotspots());
+  const [hotspots, setHotspots] = useState([]);
   const [isLive, setIsLive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -29,11 +28,15 @@ export default function HotspotsPage() {
       try {
         const data = await getHotspots(selectedFacility?.id ? { facility_id: selectedFacility.id } : {});
         if (!mounted) return;
-        const normalized = data.map((h) => ({
+        const normalized = (data || []).map((h) => ({
           ...h,
           opportunityScore: Number(h.opportunity_score !== undefined ? h.opportunity_score : h.opportunityScore || 0),
           emissions: Number(h.emissions || 0),
           contribution: Number(h.contribution || 0),
+          source: h.source || h.source_name || "Unknown emitter",
+          process: h.process || h.source_category || "Unclassified process",
+          priority: h.priority || "low",
+          trend: h.trend || "—",
         }));
         setHotspots(normalized);
         setIsLive(true);

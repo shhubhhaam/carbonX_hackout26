@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Database,
   UploadCloud,
@@ -22,72 +22,75 @@ import MetricCard from "@/components/ui/MetricCard";
 import StatusBadge from "@/components/ui/StatusBadge";
 import DemoDisclaimer from "@/components/ui/DemoDisclaimer";
 import Tabs from "@/components/ui/Tabs";
+import { getFactoryMeasurements, getFactoryMetrics, ingestFactoryBatch } from "@/lib/api-client";
+import { useFacility } from "@/lib/FacilityContext";
+import { useRole } from "@/lib/RoleContext";
 
 export default function DataIntakePage() {
+  const { facilities, selectedFacility: activeFacility } = useFacility();
+  const { role } = useRole();
   const [activeTab, setActiveTab] = useState("Batches");
   const [search, setSearch] = useState("");
   const [selectedFacility, setSelectedFacility] = useState("all");
+  const [measurements, setMeasurements] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const fileInputRef = useRef(null);
 
-  // Demo batches
-  const batches = [
-    {
-      id: "BTCH-8821",
-      filename: "GIF_grid_electricity_q3_invoices.xlsx",
-      facility: "Gujarat Industrial Facility",
-      scope: "Scope 2",
-      records: 124,
-      fileSize: "2.4 MB",
-      date: "2025-08-28 14:32",
-      user: "A. Patel (Energy Lead)",
-      status: "completed",
-    },
-    {
-      id: "BTCH-8820",
-      filename: "MBP_biomass_feedstock_august.csv",
-      facility: "Mumbai Bioprocessing Plant",
-      scope: "Scope 1",
-      records: 86,
-      fileSize: "1.1 MB",
-      date: "2025-08-25 09:15",
-      user: "R. Sharma (Operations)",
-      status: "completed",
-    },
-    {
-      id: "BTCH-8819",
-      filename: "PCP_diesel_genset_logs_aug.csv",
-      facility: "Pune Chemical Park",
-      scope: "Scope 1",
-      records: 42,
-      fileSize: "680 KB",
-      date: "2025-08-21 16:45",
-      user: "K. Deshmukh (Plant Ops)",
-      status: "requires-review",
-    },
-    {
-      id: "BTCH-8818",
-      filename: "logistics_freight_manifests_w32.xlsx",
-      facility: "Gujarat Industrial Facility",
-      scope: "Scope 3",
-      records: 310,
-      fileSize: "4.8 MB",
-      date: "2025-08-16 11:04",
-      user: "M. Verma (Supply Chain)",
-      status: "completed",
-    },
-    {
-      id: "BTCH-8817",
-      filename: "water_treatment_chemical_receipts.csv",
-      facility: "Mumbai Bioprocessing Plant",
-      scope: "Scope 3",
-      records: 19,
-      fileSize: "340 KB",
-      date: "2025-08-12 18:20",
-      user: "S. Rao (EHS Manager)",
-      status: "pending",
-    },
-  ];
+  useEffect(() => {
+    let mounted = true;
+    async function loadMeasurements() {
+      const results = await Promise.all(
+        facilities.map(async (facility) => ({
+          facility,
+          rows: await getFactoryMeasurements(facility.id, 1000),
+        }))
+      );
+      if (mounted) {
+        setMeasurements(results.flatMap(({ facility, rows }) => rows.map((row) => ({ ...row, facility }))));
+        setLoading(false);
+      }
+    }
+    loadMeasurements();
+    return () => { mounted = false; };
+  }, [facilities]);
+
+  async function handleFileUpload(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !activeFacility?.id) return;
+    setIsUploading(true);
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      if (lines.length < 2) throw new Error("The CSV must contain a header and at least one data row.");
+      const headers = lines[0].split(",").map((header) => header.trim().toLowerCase());
+      const dateIndex = headers.findIndex((header) => ["recorded_at", "date", "timestamp", "recorded date"].includes(header));
+      const valueIndex = headers.findIndex((header) => ["value", "numeric_value", "amount", "quantity"].includes(header));
+      const metricIndex = headers.findIndex((header) => ["metric", "metric_name", "metric name", "parameter"].includes(header));
+      if (dateIndex < 0 || valueIndex < 0 || metricIndex < 0) throw new Error("CSV needs metric, value, and recorded_at/date columns.");
+
+      const metrics = await getFactoryMetrics(activeFacility.id);
+      const metricNames = new Map(metrics.map((metric) => [metric.name.toLowerCase(), metric.name]));
+      const measurements = lines.slice(1).map((line, index) => {
+        const cells = line.split(",").map((cell) => cell.trim());
+        const metric = metricNames.get(cells[metricIndex]?.toLowerCase());
+        const value = Number(cells[valueIndex]);
+        if (!metric || !Number.isFinite(value) || !cells[dateIndex]) throw new Error(`Invalid row ${index + 2}: metric, value, or date is invalid.`);
+        return { metric_name_or_id: metric, value, recorded_at: new Date(cells[dateIndex]).toISOString() };
+      });
+      const result = await ingestFactoryBatch(activeFacility.id, measurements);
+      if (!result) throw new Error("The backend could not ingest this CSV.");
+      setUploadSuccess(true);
+      setTimeout(() => setUploadSuccess(false), 4000);
+    } catch (error) {
+      setUploadSuccess(false);
+      window.alert(error.message || "CSV upload failed.");
+    } finally {
+      setIsUploading(false);
+    }
+  }
 
   const handleSimulateUpload = () => {
     setIsUploading(true);
@@ -98,13 +101,13 @@ export default function DataIntakePage() {
     }, 1500);
   };
 
-  const filteredBatches = batches.filter((b) => {
+  const filteredBatches = measurements.filter((b) => {
     const matchSearch =
       b.filename.toLowerCase().includes(search.toLowerCase()) ||
-      b.facility.toLowerCase().includes(search.toLowerCase()) ||
+      b.facility.name.toLowerCase().includes(search.toLowerCase()) ||
       b.id.toLowerCase().includes(search.toLowerCase());
     const matchFacility =
-      selectedFacility === "all" || b.facility.toLowerCase().includes(selectedFacility.toLowerCase());
+      selectedFacility === "all" || b.facility.name.toLowerCase().includes(selectedFacility.toLowerCase());
     return matchSearch && matchFacility;
   });
 
@@ -121,10 +124,13 @@ export default function DataIntakePage() {
               <RefreshCw size={14} />
               Connected Sources
             </Link>
-            <button onClick={handleSimulateUpload} className="primary-button" disabled={isUploading}>
+            {role === "SME_OWNER" && <>
+            <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFileUpload} style={{ display: "none" }} />
+            <button onClick={() => fileInputRef.current?.click()} className="primary-button" disabled={isUploading || !activeFacility}>
               <UploadCloud size={15} />
-              {isUploading ? "Validating & Ingesting..." : "Upload Activity Batch"}
+              {isUploading ? "Validating & Ingesting..." : "Upload CSV"}
             </button>
+            </>}
           </div>
         }
       />
@@ -133,7 +139,7 @@ export default function DataIntakePage() {
       <div className="metrics-grid">
         <MetricCard
           label="Total Activity Records"
-          value="14,280"
+          value={measurements.length.toLocaleString()}
           unit="entries"
           trend="up"
           change="+1,240 this month"
@@ -141,7 +147,7 @@ export default function DataIntakePage() {
         />
         <MetricCard
           label="Automated Ingestion"
-          value="92.4"
+          value={measurements.length ? ((measurements.filter((m) => m.quality_status === "VALIDATED").length / measurements.length) * 100).toFixed(1) : "0"}
           unit="%"
           trend="up"
           change="+3.1% via IoT & API"
@@ -149,7 +155,7 @@ export default function DataIntakePage() {
         />
         <MetricCard
           label="Pending Validation"
-          value="18"
+          value={measurements.filter((m) => m.quality_status !== "VALIDATED").length.toLocaleString()}
           unit="batches"
           trend="neutral"
           change="3 flagged anomalies"
@@ -157,7 +163,7 @@ export default function DataIntakePage() {
         />
         <MetricCard
           label="Data Coverage Quality"
-          value="98.2"
+          value={measurements.length ? ((measurements.filter((m) => m.quality_status === "VALIDATED").length / measurements.length) * 100).toFixed(1) : "0"}
           unit="%"
           trend="up"
           change="Tier 1-2 primary data"
@@ -178,8 +184,7 @@ export default function DataIntakePage() {
             gap: 10,
             color: "#1e4620",
             fontSize: 13,
-          }}
-        >
+          }}>
           <CheckCircle2 size={18} color="#2e7d32" />
           <span>
             <strong>Batch successfully uploaded!</strong> 128 emission records parsed, mapped against GHG Protocol factors, and verified.
@@ -209,14 +214,14 @@ export default function DataIntakePage() {
                 cursor: "pointer",
                 transition: "all 0.15s ease",
               }}
-              onClick={handleSimulateUpload}
+              onClick={() => role === "SME_OWNER" && fileInputRef.current?.click()}
             >
               <UploadCloud size={32} color="#355c45" style={{ margin: "0 auto 10px" }} />
               <div style={{ fontWeight: 600, fontSize: 14, color: "#141f18", marginBottom: 4 }}>
-                Drop Excel (.xlsx), CSV, or PDF utility bills here
+                Drop a CSV activity file here
               </div>
               <div style={{ fontSize: 12, color: "#667066" }}>
-                Automatic column mapping for Electricity, Diesel, Natural Gas, Biomass, and Water. Max file size: 50MB.
+                Required columns: metric, value, and recorded_at/date. Columns are matched to this factory&apos;s metric definitions.
               </div>
             </div>
 
@@ -247,9 +252,9 @@ export default function DataIntakePage() {
                 onChange={(e) => setSelectedFacility(e.target.value)}
               >
                 <option value="all">All Facilities</option>
-                <option value="gujarat">Gujarat Industrial</option>
-                <option value="mumbai">Mumbai Bioprocessing</option>
-                <option value="pune">Pune Chemical</option>
+                {facilities.map((facility) => (
+                  <option key={facility.id} value={facility.name}>{facility.name}</option>
+                ))}
               </select>
             </div>
 
@@ -268,27 +273,29 @@ export default function DataIntakePage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredBatches.map((batch) => (
+                {loading ? (
+                  <tr><td colSpan={8} style={{ padding: 32, textAlign: "center" }}>Loading measurements...</td></tr>
+                ) : filteredBatches.map((batch) => (
                   <tr key={batch.id}>
                     <td>
                       <div style={{ fontWeight: 600, color: "#141f18" }}>{batch.id}</div>
                       <div style={{ fontSize: 11, color: "#667066", display: "flex", alignItems: "center", gap: 4 }}>
-                        <FileText size={11} /> {batch.filename} ({batch.fileSize})
+                        <FileText size={11} /> {batch.metric_name || "Measurement"} · {batch.raw_unit || "unit not specified"}
                       </div>
                     </td>
-                    <td>{batch.facility}</td>
+                    <td>{batch.facility.name}</td>
                     <td>
-                      <span className="source-tag">{batch.scope}</span>
+                      <span className="source-tag">{batch.quality_status || "unknown"}</span>
                     </td>
-                    <td style={{ fontWeight: 600 }}>{batch.records}</td>
-                    <td style={{ fontSize: 12, color: "#4f584f" }}>{batch.user}</td>
-                    <td style={{ fontSize: 12, color: "#667066" }}>{batch.date}</td>
+                    <td style={{ fontWeight: 600 }}>{batch.numeric_value ?? batch.value ?? "—"}</td>
+                    <td style={{ fontSize: 12, color: "#4f584f" }}>{batch.raw_unit || "—"}</td>
+                    <td style={{ fontSize: 12, color: "#667066" }}>{batch.recorded_at ? new Date(batch.recorded_at).toLocaleString() : "—"}</td>
                     <td>
                       <StatusBadge status={batch.status} />
                     </td>
                     <td>
                       <Link
-                        href={`/emissions?batch=${batch.id}`}
+                        href={`/emissions?measurement=${batch.id}`}
                         className="secondary-button"
                         style={{ padding: "4px 8px", fontSize: 11 }}
                       >
@@ -313,9 +320,9 @@ export default function DataIntakePage() {
               <div>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 5 }}>Target Facility</label>
                 <select className="select-input" style={{ width: "100%" }}>
-                  <option>Gujarat Industrial Facility (GIF-001)</option>
-                  <option>Mumbai Bioprocessing Plant (MBP-002)</option>
-                  <option>Pune Chemical Park (PCP-003)</option>
+                  {facilities.map((facility) => (
+                    <option key={facility.id}>{facility.name} ({facility.code || facility.id})</option>
+                  ))}
                 </select>
               </div>
 

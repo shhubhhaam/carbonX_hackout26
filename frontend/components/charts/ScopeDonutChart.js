@@ -16,7 +16,7 @@ export default function ScopeDonutChart({ data, centerLabel, centerValue }) {
             paddingAngle={2}
           >
             {data.map((entry, i) => (
-              <Cell key={entry.name} fill={entry.color || "#355c45"} opacity={1 - i * 0.1} />
+              <Cell key={`${entry.name}-${i}`} fill={entry.color || "#355c45"} opacity={1 - i * 0.1} />
             ))}
           </Pie>
           <Tooltip

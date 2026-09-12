@@ -10,8 +10,7 @@ export default function LandingPage() {
         position: "relative",
         minHeight: "100vh",
         display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
+        alignItems: "stretch",
         justifyContent: "center",
         background: "linear-gradient(180deg, #fbfaf5 0%, #f5f6ef 55%, #eef1e7 100%)",
         padding: "24px",
@@ -31,7 +30,8 @@ export default function LandingPage() {
         <circle cx="100%" cy="95%" r="140" fill="none" stroke="#355c45" strokeOpacity="0.06" strokeWidth="1.5" />
       </svg>
 
-      <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <div className="landing-layout" style={{ position: "relative", zIndex: 1 }}>
+      <div className="landing-content">
       <div
         style={{
           width: 64,
@@ -85,7 +85,7 @@ export default function LandingPage() {
       </p>
 
       <Link
-        href="http://localhost:3000/dashboard"
+        href="/auth?mode=login"
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -102,6 +102,20 @@ export default function LandingPage() {
       >
         Open Dashboard
         <ArrowRight size={16} />
+      </Link>
+
+      <Link
+        href="/auth?mode=signup"
+        style={{
+          marginTop: 12,
+          color: "var(--green, #355c45)",
+          fontSize: 13,
+          fontWeight: 600,
+          textDecoration: "underline",
+          textUnderlineOffset: 3,
+        }}
+      >
+        Log in or create an account
       </Link>
 
       <div
@@ -135,6 +149,8 @@ export default function LandingPage() {
         ))}
       </div>
       </div>
+
+    </div>
     </div>
   );
 }

@@ -33,7 +33,7 @@ export default function HotspotBarChart({ data, seriesName = "Emissions (tCO₂e
         />
         <Bar dataKey="emissions" name={seriesName} radius={[0, 4, 4, 0]}>
           {data.map((entry, i) => (
-            <Cell key={entry.process} fill={entry.anomaly ? "#ad6959" : "#355c45"} opacity={1 - i * 0.08} />
+            <Cell key={`${entry.process}-${i}`} fill={entry.anomaly ? "#ad6959" : "#355c45"} opacity={1 - i * 0.08} />
           ))}
         </Bar>
       </BarChart>

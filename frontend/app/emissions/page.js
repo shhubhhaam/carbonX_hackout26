@@ -20,14 +20,11 @@ import MetricCard from "@/components/ui/MetricCard";
 import DemoDisclaimer from "@/components/ui/DemoDisclaimer";
 import EmissionsTrendChart from "@/components/charts/EmissionsTrendChart";
 import ScopeDonutChart from "@/components/charts/ScopeDonutChart";
-import {
-  getEmissions as getLocalEmissions,
-  getScopeBreakdown as getLocalScopeBreakdown,
-  getEmissionsBySource as getLocalEmissionsBySource,
-} from "@/lib/demo-data/index";
+import { getFactoryEmissionRecords, getEmissionsTrend, getScopeBreakdown } from "@/lib/api-client";
+import { useFacility } from "@/lib/FacilityContext";
 
 
-const DETAILED_LEDGER = [
+/* const DETAILED_LEDGER = [
   {
     id: "EM-2025-0811",
     date: "2025-08-28",
@@ -75,9 +72,9 @@ const DETAILED_LEDGER = [
     emissions: 6.4,
     dataQuality: "Tier 1 (Receipts)",
     sourceDoc: "IOCL_fuel_slip.pdf",
-  },
-  {
-    id: "EM-2025-0807",
+            {facilities.map((facility) => (
+              <option key={facility.id} value={facility.name}>{facility.name}</option>
+            ))}
     date: "2025-08-15",
     facility: "Gujarat Industrial Facility",
     scope: "Scope 3",
@@ -100,43 +97,53 @@ const DETAILED_LEDGER = [
     dataQuality: "Tier 1 (Metered)",
     sourceDoc: "MSEDCL_aug25.pdf",
   },
-];
+]; */
 
 export default function EmissionsPage() {
+  const { facilities } = useFacility();
   const [scopeFilter, setScopeFilter] = useState("all");
   const [facilityFilter, setFacilityFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [emissionsData, setEmissionsData] = useState(getLocalEmissions());
-  const [scopeBreakdown, setScopeBreakdown] = useState(getLocalScopeBreakdown());
+  const [emissionsData, setEmissionsData] = useState([]);
+  const [scopeBreakdown, setScopeBreakdown] = useState([]);
+  const [ledger, setLedger] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [isLive, setIsLive] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     async function loadEmissions() {
       try {
-        const [emRes, scRes] = await Promise.allSettled([
-          fetch("http://127.0.0.1:8000/api/v1/dashboard/emissions-trend").then(r => r.ok ? r.json() : null),
-          fetch("http://127.0.0.1:8000/api/v1/dashboard/scope-breakdown").then(r => r.ok ? r.json() : null)
+        const [trend, scopes, records] = await Promise.all([
+          getEmissionsTrend(),
+          getScopeBreakdown(),
+          Promise.all(facilities.map((facility) => getFactoryEmissionRecords(facility.id, 500)))
         ]);
         if (!mounted) return;
-
-        if (emRes.status === "fulfilled" && emRes.value?.data) {
-          setEmissionsData(emRes.value.data);
-          setIsLive(true);
-        }
-        if (scRes.status === "fulfilled" && scRes.value?.data) {
-          setScopeBreakdown(scRes.value.data);
-          setIsLive(true);
-        }
+        setEmissionsData(trend || []);
+        setScopeBreakdown(scopes || []);
+        setLedger(records.flat().map((row) => ({
+          ...row,
+          facility: facilities.find((facility) => facility.id === row.factory_id)?.name || row.factory_id,
+          emissions: Number(row.emission_value || 0) / 1000,
+          category: row.source_name || row.metric_name || "Unknown source",
+          scope: row.source_category || "Unclassified",
+          date: row.period_start,
+          activity: `${row.activity_value ?? "—"} ${row.activity_unit || ""}`,
+          dataQuality: row.is_estimated ? "Estimated" : "Calculated",
+        })));
+        setIsLive(true);
+        setLoading(false);
       } catch (err) {
         console.warn("Emissions fetch error:", err);
+        if (mounted) setLoading(false);
       }
     }
     loadEmissions();
     return () => { mounted = false; };
-  }, []);
+  }, [facilities]);
 
-  const filteredLedger = DETAILED_LEDGER.filter((row) => {
+  const filteredLedger = ledger.filter((row) => {
     const matchScope =
       scopeFilter === "all" || row.scope.toLowerCase().replace(/\s+/g, "") === scopeFilter.toLowerCase();
     const matchFacility =
@@ -147,6 +154,22 @@ export default function EmissionsPage() {
       row.sourceDoc.toLowerCase().includes(search.toLowerCase());
     return matchScope && matchFacility && matchSearch;
   });
+  const totalEmissions = ledger.reduce((sum, row) => sum + row.emissions, 0);
+  const scopeTotals = ledger.reduce((totals, row) => {
+    const scope = row.scope.toLowerCase().includes("electric") ? "Scope 2" : "Scope 1";
+    totals[scope] = (totals[scope] || 0) + row.emissions;
+    return totals;
+  }, {});
+  const liveScopeBreakdown = Object.entries(scopeTotals).map(([name, value], index) => ({
+    name,
+    value: Number(value.toFixed(2)),
+    color: ["#355c45", "#5d8a70", "#a3c5b0"][index % 3],
+  }));
+  const liveTrend = Object.entries(ledger.reduce((months, row) => {
+    const month = row.date ? new Date(row.date).toLocaleDateString("en-US", { month: "short" }) : "Unknown";
+    months[month] = (months[month] || 0) + row.emissions;
+    return months;
+  }, {})).map(([month, total]) => ({ month, total: Number(total.toFixed(2)) }));
 
   return (
     <>
@@ -192,7 +215,7 @@ export default function EmissionsPage() {
       <div className="metrics-grid">
         <MetricCard
           label="Total Corporate Footprint"
-          value="8,426"
+          value={totalEmissions.toLocaleString(undefined, { maximumFractionDigits: 1 })}
           unit="tCO₂e"
           trend="down"
           change="-6.4% vs previous period"
@@ -200,7 +223,7 @@ export default function EmissionsPage() {
         />
         <MetricCard
           label="Scope 1 (Direct)"
-          value="2,930"
+          value={(scopeTotals["Scope 1"] || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
           unit="tCO₂e"
           trend="down"
           change="Process & fuel combustion"
@@ -208,7 +231,7 @@ export default function EmissionsPage() {
         />
         <MetricCard
           label="Scope 2 (Market-based)"
-          value="2,100"
+          value={(scopeTotals["Scope 2"] || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
           unit="tCO₂e"
           trend="down"
           change="Purchased electricity"
@@ -216,7 +239,7 @@ export default function EmissionsPage() {
         />
         <MetricCard
           label="Scope 3 (Value Chain)"
-          value="3,396"
+          value={(scopeTotals["Scope 3"] || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
           unit="tCO₂e"
           trend="down"
           change="Upstream freight & waste"
@@ -232,7 +255,7 @@ export default function EmissionsPage() {
             <div className="panel-subtitle">Historical stacked trend across 2025 calendar year</div>
           </div>
           <div style={{ height: 260 }}>
-            <EmissionsTrendChart data={emissionsData} />
+            <EmissionsTrendChart data={liveTrend.length ? liveTrend : emissionsData} />
           </div>
         </div>
 
@@ -242,7 +265,7 @@ export default function EmissionsPage() {
             <div className="panel-subtitle">YTD proportion of Scope 1, 2, and 3</div>
           </div>
           <div style={{ height: 260 }}>
-            <ScopeDonutChart data={scopeBreakdown} centerLabel="Total YTD" centerValue="8,426 t" />
+            <ScopeDonutChart data={liveScopeBreakdown.length ? liveScopeBreakdown : scopeBreakdown} centerLabel="Total YTD" centerValue={`${totalEmissions.toFixed(1)} t`} />
           </div>
         </div>
       </div>
@@ -302,9 +325,9 @@ export default function EmissionsPage() {
             onChange={(e) => setFacilityFilter(e.target.value)}
           >
             <option value="all">All Facilities</option>
-            <option value="gujarat">Gujarat Industrial Facility</option>
-            <option value="mumbai">Mumbai Bioprocessing Plant</option>
-            <option value="pune">Pune Chemical Park</option>
+            {facilities.map((facility) => (
+              <option key={facility.id} value={facility.name}>{facility.name}</option>
+            ))}
           </select>
         </div>
 
@@ -334,14 +357,14 @@ export default function EmissionsPage() {
                   <div style={{ fontWeight: 500, marginTop: 3 }}>{row.category}</div>
                 </td>
                 <td style={{ fontSize: 12, fontWeight: 500 }}>{row.activity}</td>
-                <td style={{ fontSize: 11, color: "#4f584f" }}>{row.factor}</td>
+                <td style={{ fontSize: 11, color: "#4f584f" }}>{row.calculation_method || "—"}</td>
                 <td style={{ fontWeight: 600, color: "#355c45" }}>{row.emissions.toFixed(1)} t</td>
                 <td>
                   <span style={{ fontSize: 11, color: "#2e7d32", fontWeight: 500 }}>{row.dataQuality}</span>
                 </td>
                 <td>
                   <Link
-                    href={`/evidence?file=${row.sourceDoc}`}
+                    href={`/evidence?measurement=${row.measurement_id}`}
                     className="secondary-button"
                     style={{ padding: "3px 8px", fontSize: 11 }}
                   >

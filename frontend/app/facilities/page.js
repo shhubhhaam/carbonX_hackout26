@@ -6,48 +6,24 @@ import { Factory, MapPin, ArrowRight, Search } from "lucide-react";
 import PageHeader from "@/components/ui/PageHeader";
 import StatusBadge from "@/components/ui/StatusBadge";
 import DemoDisclaimer from "@/components/ui/DemoDisclaimer";
-import { getFacilities as getLocalFacilities } from "@/lib/demo-data/index";
+import { useFacility } from "@/lib/FacilityContext";
 
 export default function FacilitiesPage() {
-  const [facilities, setFacilities] = useState(getLocalFacilities());
-  const [isLive, setIsLive] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const { facilities, facilitiesLoading } = useFacility();
   const [search, setSearch] = useState("");
-
-  useEffect(() => {
-    let mounted = true;
-    async function loadFacilities() {
-      try {
-        const res = await fetch("http://127.0.0.1:8000/api/v1/facilities/overview");
-        if (res.ok) {
-          const json = await res.json();
-          if (mounted && json.data && json.data.length > 0) {
-            setFacilities(json.data);
-            setIsLive(true);
-          }
-        }
-      } catch (err) {
-        console.warn("Backend facilities fetch error:", err);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
-    loadFacilities();
-    return () => { mounted = false; };
-  }, []);
 
   const filtered = facilities.filter(
     (f) =>
-      f.name.toLowerCase().includes(search.toLowerCase()) ||
-      f.location.toLowerCase().includes(search.toLowerCase()) ||
-      f.sector.toLowerCase().includes(search.toLowerCase())
+      f.name?.toLowerCase().includes(search.toLowerCase()) ||
+      f.location?.toLowerCase().includes(search.toLowerCase()) ||
+      f.industry_type?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <DemoDisclaimer compact />
-        {isLive && (
+        {!facilitiesLoading && (
           <span style={{
             display: "inline-flex",
             alignItems: "center",
@@ -61,7 +37,7 @@ export default function FacilitiesPage() {
             fontWeight: 600
           }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#2e7d32", display: "inline-block" }}></span>
-            Live Telemetry: Supabase Postgres
+            Live Facilities: Supabase Postgres
           </span>
         )}
       </div>
@@ -110,7 +86,13 @@ export default function FacilitiesPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((f) => (
+            {facilitiesLoading ? (
+              <tr>
+                <td colSpan={10} style={{ padding: 32, textAlign: "center", color: "#8a968a" }}>
+                  Loading facilities...
+                </td>
+              </tr>
+            ) : filtered.map((f) => (
               <tr key={f.id}>
                 <td>
                   <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -119,39 +101,33 @@ export default function FacilitiesPage() {
                     </div>
                     <div>
                       <strong style={{ display: "block", marginBottom: 2 }}>{f.name}</strong>
-                      <span style={{ color: "#929a92", fontSize: 9 }}>{f.id}</span>
+                      <span style={{ color: "#929a92", fontSize: 9 }}>{f.code || f.id}</span>
                     </div>
                   </div>
                 </td>
-                <td style={{ color: "#687168" }}>{f.sector}</td>
+                <td style={{ color: "#687168" }}>{f.industry_type || "—"}</td>
                 <td>
                   <div style={{ display: "flex", alignItems: "center", gap: 4, color: "#687168" }}>
                     <MapPin size={11} />
-                    {f.location}
+                    {f.location || "—"}
                   </div>
                 </td>
-                <td style={{ color: "#687168", fontSize: 10 }}>{f.reportingPeriod}</td>
-                <td>
-                  <strong>{f.production.toLocaleString()}</strong>
-                  <span style={{ color: "#929a92", fontSize: 9, marginLeft: 3 }}>{f.productionUnit}</span>
+                <td style={{ color: "#687168", fontSize: 10 }}>
+                  {f.commissioned_at ? new Date(f.commissioned_at).toLocaleDateString() : "—"}
                 </td>
                 <td>
-                  <strong>{f.totalEmissions.toLocaleString()}</strong>
-                  <span style={{ color: "#929a92", fontSize: 9, marginLeft: 3 }}>tCO₂e</span>
+                  <strong>—</strong>
                 </td>
                 <td>
-                  <strong>{f.emissionIntensity}</strong>
-                  <span style={{ color: "#929a92", fontSize: 9, marginLeft: 3 }}>tCO₂e/t</span>
+                  <strong>—</strong>
+                </td>
+                <td>
+                  <strong>—</strong>
                 </td>
                 <td style={{ minWidth: 100 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <div className="completeness-bar" style={{ flex: 1 }}>
-                      <div className="completeness-fill" style={{ width: `${f.dataCompleteness}%` }} />
-                    </div>
-                    <span style={{ fontSize: 9, color: "#687168", whiteSpace: "nowrap" }}>{f.dataCompleteness}%</span>
-                  </div>
+                  <span style={{ fontSize: 9, color: "#687168" }}>—</span>
                 </td>
-                <td><StatusBadge status={f.status} /></td>
+                <td><StatusBadge status={f.is_active === false ? "inactive" : "active"} /></td>
                 <td>
                   <Link href={`/facilities/${f.id}`} className="text-button">
                     View <ArrowRight size={12} />

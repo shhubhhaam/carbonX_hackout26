@@ -145,18 +145,23 @@ def list_hotspots(
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            query = "SELECT * FROM emission_hotspots WHERE 1=1"
+            query = """
+                SELECT eh.*, f.name AS facility_name
+                FROM emission_hotspots eh
+                LEFT JOIN factories f ON eh.facility_id::text = f.id::text OR eh.facility_id::text = f.code
+                WHERE 1=1
+            """
             params = []
             if facility_id:
-                query += " AND facility_id = %s"
-                params.append(facility_id)
+                query += " AND (eh.facility_id::text = %s OR f.id::text = %s OR f.code = %s)"
+                params.extend([facility_id, facility_id, facility_id])
             if priority:
                 query += " AND priority = %s"
                 params.append(priority)
             if anomaly is not None:
                 query += " AND anomaly = %s"
                 params.append(anomaly)
-            query += " ORDER BY opportunity_score DESC;"
+            query += " ORDER BY eh.opportunity_score DESC;"
             cur.execute(query, params)
             rows = [dict(r) for r in cur.fetchall()]
         return {"status": "success", "count": len(rows), "data": rows}

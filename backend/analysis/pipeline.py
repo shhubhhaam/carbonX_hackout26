@@ -382,7 +382,7 @@ class AnalysisPipeline:
             ],
             "CAVEATS": [
                 "Emission factors are DEMONSTRATION ASSUMPTIONS — not site-validated",
-                "ML attribution used 10 samples — insufficient for production ML models",
+                "ML attribution uses one sample per day; more time-series data is recommended for production ML",
                 "Impact estimates are illustrative — real deployment requires techno-economic assessment",
                 "Correlation patterns do NOT imply causation without further investigation"
             ]

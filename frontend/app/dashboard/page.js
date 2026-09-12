@@ -27,8 +27,11 @@ import HotspotBarChart from "@/components/charts/HotspotBarChart";
 import FacilityBarChart from "@/components/charts/FacilityBarChart";
 import { runFactoryAnalysis, getFactoryFeatureSeries } from "@/lib/api-client";
 import { useFacility } from "@/lib/FacilityContext";
+import { analysisCacheKey, readStored, writeStored } from "@/lib/client-storage";
+import { useRole } from "@/lib/RoleContext";
 
 const SOURCE_COLORS = ["#355c45", "#5d8a70", "#8bb09a", "#a3c5b0", "#c6ddce"];
+const DASHBOARD_PERIOD_KEY = "dashboardPeriod";
 
 function isoDate(d) {
   return d.toISOString().slice(0, 10);
@@ -39,17 +42,73 @@ function daysAgo(n) {
   return isoDate(d);
 }
 
+function RoleMetric({ label, value, unit }) {
+  return <div className="detail-stat"><div className="detail-stat-label">{label}</div><div className="detail-stat-value">{value}<span className="detail-stat-unit">{unit}</span></div></div>;
+}
+
+function OperatorDashboard({ facility, report }) {
+  const metrics = report?.features || {};
+  return (
+    <>
+      <section className="hero">
+        <div><div className="eyebrow">FACTORY OPERATIONS</div><h1>What needs attention now?</h1><p>Operational signals and emission drivers for {facility?.name || "your assigned factory"}.</p></div>
+        <div className="hero-actions"><Link href="/data-intake" className="primary-button"><Database size={15} /> Add measurement</Link></div>
+      </section>
+      <section className="facility-hero-grid">
+        <RoleMetric label="Records analyzed" value={report?.emission_records_count || "—"} unit="records" />
+        <RoleMetric label="Daily feature rows" value={report?.feature_matrix_rows || "—"} unit="rows" />
+        <RoleMetric label="Coal consumption" value={metrics.coal_statistics?.mean?.value?.toFixed?.(1) || "—"} unit="avg" />
+        <RoleMetric label="Operational status" value={report ? "Live" : "Waiting"} unit="" />
+      </section>
+      <Panel><SectionHeader eyebrow="OPERATIONAL SIGNALS" title="Issues to check" /><div className="activity-list" style={{ padding: "8px 21px 16px" }}>
+        {(report?.root_cause?.patterns || []).slice(0, 4).map((pattern) => <div className="activity-row" key={pattern.feature}><div className="activity-icon"><AlertTriangle size={14} /></div><div className="activity-copy"><strong>{pattern.feature}</strong><span>{pattern.interpretation}</span></div></div>)}
+        {!report?.root_cause?.patterns?.length && <div style={{ padding: 12, color: "#8a968a", fontSize: 12 }}>Run an analysis to identify operational signals.</div>}
+      </div></Panel>
+    </>
+  );
+}
+
+function RegulatorDashboard() {
+  return (
+    <>
+      <section className="hero"><div><div className="eyebrow">REGULATORY MONITORING</div><h1>Environmental performance at a glance.</h1><p>Compliance-focused visibility across authorized factories and industry trends.</p></div><div className="hero-actions"><Link href="/verified-outcomes" className="primary-button"><CheckCircle2 size={15} /> Compliance outcomes</Link></div></section>
+      <section className="facility-hero-grid"><RoleMetric label="Authorized facilities" value="—" unit="facilities" /><RoleMetric label="Threshold breaches" value="—" unit="open" /><RoleMetric label="High-risk facilities" value="—" unit="facilities" /><RoleMetric label="Industry trend" value="—" unit="" /></section>
+      <Panel><SectionHeader eyebrow="COMPLIANCE SCOPE" title="Authorized environmental data" /><div style={{ padding: "16px 21px", color: "#687168", fontSize: 12, lineHeight: 1.7 }}>Compliance status, emission thresholds, violations, and industry aggregates will appear here once regulatory access is assigned to an organization or factory.</div></Panel>
+    </>
+  );
+}
+
 export default function DashboardPage() {
   const { selectedFacility, facilitiesLoading } = useFacility();
-  const [periodStart, setPeriodStart] = useState(() => daysAgo(14));
-  const [periodEnd, setPeriodEnd] = useState(() => isoDate(new Date()));
+  const { role } = useRole();
+  const savedPeriod = readStored(DASHBOARD_PERIOD_KEY, {});
+  const [periodStart, setPeriodStartState] = useState(() => savedPeriod.start || daysAgo(14));
+  const [periodEnd, setPeriodEndState] = useState(() => savedPeriod.end || isoDate(new Date()));
   const [report, setReport] = useState(null);
   const [trendSeries, setTrendSeries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  function setPeriodStart(value) {
+    setPeriodStartState(value);
+    writeStored(DASHBOARD_PERIOD_KEY, { start: value, end: periodEnd });
+  }
+
+  function setPeriodEnd(value) {
+    setPeriodEndState(value);
+    writeStored(DASHBOARD_PERIOD_KEY, { start: periodStart, end: value });
+  }
+
   async function runAnalysis(facilityId, start, end) {
     if (!facilityId) return;
+    const cacheKey = analysisCacheKey(facilityId, start, end);
+    const cached = readStored(cacheKey);
+    if (cached) {
+      setReport(cached.report);
+      setTrendSeries(cached.trendSeries || []);
+      setError(cached.error || null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -85,6 +144,7 @@ export default function DashboardPage() {
           total: Number((values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(1)),
         }));
       setTrendSeries(dedup);
+      writeStored(cacheKey, { report: data, trendSeries: dedup, error: null });
     } catch (e) {
       console.warn("Factory analysis failed:", e);
       setError("Analysis failed unexpectedly. Check the backend logs.");
@@ -94,11 +154,13 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    if (selectedFacility?.id) {
-      runAnalysis(selectedFacility.id, periodStart, periodEnd);
+    if (selectedFacility?.id && !facilitiesLoading && role !== "INDUSTRY_REGULATOR") {
+      const timer = window.setTimeout(() => {
+        runAnalysis(selectedFacility.id, periodStart, periodEnd);
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFacility?.id]);
+  }, [selectedFacility?.id, periodStart, periodEnd, facilitiesLoading, role]);
 
   const contribution = report?.contribution;
   const recommendation = report?.recommendation;
@@ -122,6 +184,9 @@ export default function DashboardPage() {
     name: a.alternative_name.length > 18 ? a.alternative_name.slice(0, 18) + "…" : a.alternative_name,
     emissions: a.reduction_pct_of_total,
   }));
+
+  if (role === "INDUSTRY_REGULATOR") return <RegulatorDashboard />;
+  if (role === "FACTORY_OPERATOR") return <OperatorDashboard facility={selectedFacility} report={report} />;
 
   return (
     <>
@@ -292,8 +357,8 @@ export default function DashboardPage() {
               <SectionHeader eyebrow="SOURCE BREAKDOWN" title="Where emissions come from" />
               <ScopeDonutChart data={sourceChartData} centerValue={totalTCO2e.toFixed(1)} centerLabel="tCO₂e" />
               <div className="mix-list">
-                {sourceChartData.map((item) => (
-                  <div className="mix-row" key={item.name}>
+                {sourceChartData.map((item, i) => (
+                  <div className="mix-row" key={`${item.name}-${i}`}>
                     <span className="mix-indicator" style={{ background: item.color }} />
                     <span style={{ fontSize: 10 }}>{item.name}</span>
                     <strong style={{ fontSize: 10 }}>{((item.value / (totalTCO2e || 1)) * 100).toFixed(0)}%</strong>
@@ -315,8 +380,8 @@ export default function DashboardPage() {
                 <span>tCO₂e</span>
                 <span>Contribution</span>
               </div>
-              {sources.map((s) => (
-                <div key={s.source_id} className="table-row" style={{ gridTemplateColumns: "minmax(160px,1.5fr) 0.7fr 0.6fr", display: "grid" }}>
+              {sources.map((s, i) => (
+                <div key={`${s.source_id}-${i}`} className="table-row" style={{ gridTemplateColumns: "minmax(160px,1.5fr) 0.7fr 0.6fr", display: "grid" }}>
                   <div className="source-cell">
                     <div className="source-icon">
                       <Zap size={14} />

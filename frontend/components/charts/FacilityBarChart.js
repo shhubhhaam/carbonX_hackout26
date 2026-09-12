@@ -38,7 +38,7 @@ export default function FacilityBarChart({ data, seriesName = "Emissions (tCO₂
         />
         <Bar dataKey="emissions" name={seriesName} radius={[4, 4, 0, 0]}>
           {data.map((entry, i) => (
-            <Cell key={entry.name} fill={i === 0 ? "#355c45" : "#a3c5b0"} />
+            <Cell key={`${entry.name}-${i}`} fill={i === 0 ? "#355c45" : "#a3c5b0"} />
           ))}
         </Bar>
       </BarChart>

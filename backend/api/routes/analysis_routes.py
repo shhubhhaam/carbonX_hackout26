@@ -162,6 +162,38 @@ def get_contribution_analysis(factory_id: str):
         conn.close()
 
 
+@router.get("/factories/{factory_id}/emissions")
+def get_emission_records(factory_id: str, limit: int = Query(1000, ge=1, le=5000)):
+    """Retrieve calculated emission records stored for a factory."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT er.id, er.factory_id, er.measurement_id,
+                       er.period_start, er.period_end, er.activity_value,
+                       er.activity_unit, er.emission_value, er.emission_unit,
+                       er.calculation_method, er.is_estimated,
+                       es.name AS source_name, es.source_category,
+                       et.name AS emission_type_name,
+                       md.name AS metric_name
+                FROM emission_records er
+                JOIN emission_sources es ON es.id = er.emission_source_id
+                JOIN emission_types et ON et.id = er.emission_type_id
+                LEFT JOIN measurements m ON m.id = er.measurement_id
+                LEFT JOIN metric_definitions md ON md.id = m.metric_definition_id
+                WHERE er.factory_id = %s
+                ORDER BY er.period_start DESC
+                LIMIT %s;
+                """,
+                (factory_id, limit)
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+        return {"status": "success", "count": len(rows), "data": rows}
+    finally:
+        conn.close()
+
+
 @router.get("/factories/{factory_id}/features")
 def get_feature_values(
     factory_id: str,

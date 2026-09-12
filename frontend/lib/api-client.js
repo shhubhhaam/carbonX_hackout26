@@ -5,14 +5,25 @@
  */
 
 import * as demoData from "./demo-data/index.js";
+import { clearApiCache, readCached, writeCached } from "./client-storage.js";
+import { getSupabaseBrowserClient } from "./supabase-browser.js";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
 
 async function apiFetch(endpoint, options = {}) {
+  const isRead = !options.method || options.method.toUpperCase() === "GET";
+  if (isRead) {
+    const cached = readCached(endpoint);
+    if (cached !== null) return cached;
+  }
   try {
+    const supabase = getSupabaseBrowserClient();
+    const sessionResult = supabase ? await supabase.auth.getSession() : null;
+    const accessToken = sessionResult?.data?.session?.access_token;
     const res = await fetch(`${API_BASE}${endpoint}`, {
       headers: {
         "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...options.headers,
       },
       ...options,
@@ -22,7 +33,10 @@ async function apiFetch(endpoint, options = {}) {
       throw new Error(`API error ${res.status}: ${res.statusText}`);
     }
     const json = await res.json();
-    return json.data !== undefined ? json.data : json;
+    const data = json.data !== undefined ? json.data : json;
+    if (isRead) writeCached(endpoint, data);
+    else clearApiCache();
+    return data;
   } catch (err) {
     console.warn(`[CarbonX API] Falling back to local data for ${endpoint}:`, err.message);
     return null;
@@ -73,7 +87,7 @@ export async function getFacilityProcesses(facilityId) {
 export async function getHotspots(filters = {}) {
   const query = new URLSearchParams(filters).toString();
   const data = await apiFetch(`/hotspots${query ? `?${query}` : ""}`);
-  return data || demoData.getHotspots();
+  return data || [];
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +245,29 @@ export async function runSimulator(scenario) {
 // Real factories (Supabase-backed measurement + analysis pipeline)
 // ---------------------------------------------------------------------------
 export async function getFactories() {
-  const data = await apiFetch("/factories");
+  const data = await apiFetch("/factories?cache_version=2");
+  return data || [];
+}
+
+export async function getFactoryMeasurements(factoryId, limit = 1000) {
+  const data = await apiFetch(`/factories/${factoryId}/measurements?limit=${limit}`);
+  return data || [];
+}
+
+export async function getFactoryMetrics(factoryId) {
+  const data = await apiFetch(`/factories/${factoryId}/metrics`);
+  return data || [];
+}
+
+export async function ingestFactoryBatch(factoryId, measurements) {
+  return await apiFetch(`/factories/${factoryId}/measurements/batch`, {
+    method: "POST",
+    body: JSON.stringify({ measurements }),
+  });
+}
+
+export async function getFactoryEmissionRecords(factoryId, limit = 1000) {
+  const data = await apiFetch(`/factories/${factoryId}/emissions?limit=${limit}`);
   return data || [];
 }
 

@@ -8,14 +8,15 @@
  */
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { getFactories } from "./api-client";
+import { readStored, writeStored } from "./client-storage";
 
 const FacilityContext = createContext(null);
-const STORAGE_KEY = "carbonx.selectedFactoryId";
+const STORAGE_KEY = "selectedFactoryId";
 
 export function FacilityProvider({ children }) {
   const [facilities, setFacilities] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedFacilityId, setSelectedFacilityIdState] = useState(null);
+  const [selectedFacilityId, setSelectedFacilityIdState] = useState(() => readStored(STORAGE_KEY));
 
   useEffect(() => {
     let mounted = true;
@@ -26,12 +27,6 @@ export function FacilityProvider({ children }) {
       setLoading(false);
     }
     load();
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (stored) setSelectedFacilityIdState(stored);
-    } catch {
-      // localStorage unavailable (private mode, etc.) — fall back to default facility.
-    }
     return () => {
       mounted = false;
     };
@@ -39,11 +34,7 @@ export function FacilityProvider({ children }) {
 
   const setSelectedFacilityId = useCallback((id) => {
     setSelectedFacilityIdState(id);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, id);
-    } catch {
-      // ignore
-    }
+    writeStored(STORAGE_KEY, id);
   }, []);
 
   const selectedFacility =

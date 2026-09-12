@@ -14,7 +14,7 @@ operational features are statistically associated with high emissions.
       VARIABLES explain the model's emission predictions?" — statistical.
 
 ⚠️  DATA SIZE WARNING:
-    The 10-row demo dataset is insufficient for a reliable production ML model.
+    Small datasets are insufficient for a reliable production ML model.
     Results shown here are for PIPELINE DEMONSTRATION ONLY.
     A production deployment requires months of operational data.
 
@@ -212,7 +212,7 @@ class MLAttributionEngine:
                         "mae_kg": round(float(mae), 2) if not np.isnan(mae) else None,
                         "n_samples": n_samples,
                         "warning": (
-                            "DEMO ONLY — 10 samples insufficient for production ML"
+                            f"DEMO ONLY — {n_samples} samples; at least 30 recommended for production ML"
                             if n_samples < 30 else "OK"
                         )
                     }),
@@ -301,8 +301,8 @@ class MLAttributionEngine:
                 "mae_kg_co2": round(float(mae), 2) if not np.isnan(mae) else None,
             },
             "data_size_warning": (
-                "⚠️  DEMONSTRATION ONLY — 10 samples are insufficient for a reliable "
-                "production ML model. Results shown are for pipeline illustration."
+                f"DEMONSTRATION ONLY — {n_samples} samples are below the recommended "
+                "30+ samples for a reliable production ML model. Results are illustrative."
                 if n_samples < 30 else "OK"
             ),
             "important_distinction": (

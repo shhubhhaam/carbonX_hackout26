@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useFacility } from "@/lib/FacilityContext";
+import { clearCarbonXStorage } from "@/lib/client-storage";
+import { useRole } from "@/lib/RoleContext";
 import {
   Activity,
   BarChart3,
@@ -82,9 +85,16 @@ const NAV = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { facilities, selectedFacility, setSelectedFacilityId } = useFacility();
+  const { roleConfig } = useRole();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
+
+  function handleLogout() {
+    clearCarbonXStorage();
+    router.push("/");
+  }
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -177,10 +187,13 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="nav" style={{ flex: 1, overflowY: "auto" }}>
-        {NAV.map((section) => (
+        {NAV.map((section) => {
+          const items = section.items.filter((item) => roleConfig.nav.includes(item.href.slice(1)));
+          if (!items.length) return null;
+          return (
           <div key={section.label} className="nav-space">
             <div className="nav-label">{section.label}</div>
-            {section.items.map(({ href, label, icon: Icon }) => (
+            {items.map(({ href, label, icon: Icon }) => (
               <Link
                 key={href}
                 href={href}
@@ -191,15 +204,20 @@ export default function Sidebar() {
               </Link>
             ))}
           </div>
-        ))}
+          );
+        })}
       </nav>
+
+      <button className="secondary-button small" onClick={handleLogout} style={{ marginTop: 12, width: "100%" }}>
+        Log out
+      </button>
 
       {/* Bottom */}
       <div className="sidebar-bottom">
         <div className="system-status">
           <span className="status-dot" />
           <div>
-            <strong>CarbonX Intelligence</strong>
+            <strong>{roleConfig.label}</strong>
           </div>
         </div>
       </div>
