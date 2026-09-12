@@ -14,28 +14,35 @@ from dotenv import load_dotenv
 
 from storage_service import DataStorageService
 from api.routes.analysis_routes import router as analysis_router
+from api.routes.circular_routes import router as circular_router
+from api.routes.dashboard_routes import router as dashboard_router
+from api.routes.metadata_routes import router as metadata_router
 
 load_dotenv()
 
 app = FastAPI(
-    title="Industrial Sustainability Intelligence Platform",
+    title="CarbonX — Carbon Intelligence & Circular Optimization Platform",
     description=(
-        "Metadata-driven, multi-tenant platform for industrial emission analysis. "
-        "Includes dynamic data storage, 10-stage analysis pipeline, and MCDA recommendations."
+        "Enterprise intelligence & circular exchange platform. "
+        "Supports the full Detect → Characterize → Reuse → Match → Optimize → Verify lifecycle, "
+        "dynamic industrial telemetry, 10-stage GHG pipeline, and Digital Product Passports."
     ),
-    version="2.0.0"
+    version="2.5.0"
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*", "http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount analysis engine routes
+# Mount all platform routes
 app.include_router(analysis_router)
+app.include_router(circular_router)
+app.include_router(dashboard_router)
+app.include_router(metadata_router)
 
 service = DataStorageService()
 
