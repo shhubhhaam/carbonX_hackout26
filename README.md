@@ -504,3 +504,11 @@ python -m pytest tests/ -v
 **CarbonX · Detect. Optimize. Exchange. Verify.**
 
 </div>
+
+<h2 align="center">
+  Built with curiosity and a passion for sustainable industrial innovation. 🌏✨
+</h2>
+
+<h3 align="center">
+  Designed and developed by Team COSMIX for HackOut’26 — turning carbon data into circular action. 😊
+</h3>
