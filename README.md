@@ -5,7 +5,8 @@
 ### Supporting docs links : 
 
 ### PPT : https://canva.link/twxopnxxodjguqj ✅
-### Video demo : https://drive.google.com/file/d/1KhX31cQA3qCsH8bLnrL-Lx2ouMx82lYY/view?usp=drivesdk ✅
+### demo Link (Google drive) : https://drive.google.com/file/d/1KhX31cQA3qCsH8bLnrL-Lx2ouMx82lYY/view?usp=drivesdk ✅
+### demo link (Youtube) : https://youtu.be/37bJZ1a1kyY?si=SnMicBOz9NF1_9Ln✅
 
 
 
