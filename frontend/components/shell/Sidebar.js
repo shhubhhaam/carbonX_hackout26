@@ -2,10 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useFacility } from "@/lib/FacilityContext";
-import { clearCarbonXStorage } from "@/lib/client-storage";
 import { useRole } from "@/lib/RoleContext";
 import {
   Activity,
@@ -85,16 +83,10 @@ const NAV = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { facilities, selectedFacility, setSelectedFacilityId } = useFacility();
   const { roleConfig } = useRole();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
-
-  function handleLogout() {
-    clearCarbonXStorage();
-    router.push("/");
-  }
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -109,19 +101,19 @@ export default function Sidebar() {
 
   return (
     <aside className="sidebar">
-      {/* Brand */}
-      <div className="brand">
-        <div className="brand-mark" style={{ background: "#0c1310", overflow: "hidden" }}>
+      {/* Brand — links back to the landing page */}
+      <Link href="/" className="brand" style={{ textDecoration: "none", color: "inherit" }}>
+        <div className="brand-mark">
           <img
-            src="/image.png"
+            src="/logo 2.0.png"
             alt="CarbonX"
-            style={{ width: "100%", height: "100%", objectFit: "cover", mixBlendMode: "screen" }}
+            style={{ width: "100%", height: "100%", objectFit: "contain" }}
           />
         </div>
         <div>
           <div className="brand-name">CarbonX</div>
         </div>
-      </div>
+      </Link>
 
       {/* Workspace */}
       <div className="workspace" style={{ position: "relative" }} ref={wrapRef}>
@@ -207,20 +199,6 @@ export default function Sidebar() {
           );
         })}
       </nav>
-
-      <button className="secondary-button small" onClick={handleLogout} style={{ marginTop: 12, width: "100%" }}>
-        Log out
-      </button>
-
-      {/* Bottom */}
-      <div className="sidebar-bottom">
-        <div className="system-status">
-          <span className="status-dot" />
-          <div>
-            <strong>{roleConfig.label}</strong>
-          </div>
-        </div>
-      </div>
     </aside>
   );
 }

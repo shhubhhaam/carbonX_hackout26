@@ -16,6 +16,11 @@ export const metadata = {
   title: "CarbonX — Carbon Intelligence, Exchange & Circular Optimization Platform",
   description:
     "Track emissions, characterize material streams, match circular economy partners, and verify outcomes with CarbonX.",
+  icons: {
+    icon: "/logo 2.0.png",
+    shortcut: "/logo 2.0.png",
+    apple: "/logo 2.0.png",
+  },
 };
 
 export default function RootLayout({ children }) {

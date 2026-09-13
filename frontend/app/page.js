@@ -1,9 +1,41 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { ArrowRight, Recycle, ShieldCheck, Sparkles } from "lucide-react";
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 export default function LandingPage() {
+  // The landing page previously never checked auth state at all, so a
+  // logged-in user landing here (e.g. by clicking the logo) saw the same
+  // "Log in or create an account" CTA as a first-time visitor, and its
+  // "Open Dashboard" link sent them BACK to the login screen despite having
+  // a valid session — which is exactly what made the app feel like it had
+  // logged them out just for visiting this page. It hadn't; the page just
+  // never looked at the session it already had.
+  const [session, setSession] = useState(undefined); // undefined = not checked yet
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setSession(null);
+      return undefined;
+    }
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) setSession(data.session || null);
+    });
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s || null);
+    });
+    return () => {
+      mounted = false;
+      subscription.subscription.unsubscribe();
+    };
+  }, []);
+
+  const isLoggedIn = !!session;
+
   return (
     <div
       style={{
@@ -34,21 +66,18 @@ export default function LandingPage() {
       <div className="landing-content">
       <div
         style={{
-          width: 64,
-          height: 64,
-          borderRadius: 16,
-          background: "#0c1310",
+          width: 72,
+          height: 72,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           marginBottom: 28,
-          overflow: "hidden",
         }}
       >
         <img
-          src="/image.png"
+          src="/logo 2.0.png"
           alt="CarbonX"
-          style={{ width: "100%", height: "100%", objectFit: "cover", mixBlendMode: "screen" }}
+          style={{ width: "100%", height: "100%", objectFit: "contain" }}
         />
       </div>
 
@@ -85,7 +114,7 @@ export default function LandingPage() {
       </p>
 
       <Link
-        href="/auth?mode=login"
+        href={isLoggedIn ? "/dashboard" : "/auth?mode=login"}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -104,19 +133,27 @@ export default function LandingPage() {
         <ArrowRight size={16} />
       </Link>
 
-      <Link
-        href="/auth?mode=signup"
-        style={{
-          marginTop: 12,
-          color: "var(--green, #355c45)",
-          fontSize: 13,
-          fontWeight: 600,
-          textDecoration: "underline",
-          textUnderlineOffset: 3,
-        }}
-      >
-        Log in or create an account
-      </Link>
+      {!isLoggedIn && (
+        <Link
+          href="/auth?mode=signup"
+          style={{
+            marginTop: 12,
+            color: "var(--green, #355c45)",
+            fontSize: 13,
+            fontWeight: 600,
+            textDecoration: "underline",
+            textUnderlineOffset: 3,
+          }}
+        >
+          Log in or create an account
+        </Link>
+      )}
+
+      {isLoggedIn && (
+        <div style={{ marginTop: 12, fontSize: 13, color: "var(--muted, #737c72)" }}>
+          Signed in as <strong>{session.user?.email}</strong>
+        </div>
+      )}
 
       <div
         style={{

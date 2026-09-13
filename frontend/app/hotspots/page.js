@@ -8,10 +8,42 @@ import StatusBadge from "@/components/ui/StatusBadge";
 import DemoDisclaimer from "@/components/ui/DemoDisclaimer";
 import { Panel } from "@/components/ui/Panel";
 import ScoreBar from "@/components/ui/ScoreBar";
-import { getHotspots } from "@/lib/api-client";
+import { getHotspots, getFactoryContribution } from "@/lib/api-client";
 import { useFacility } from "@/lib/FacilityContext";
 
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+
+function priorityFromContributionPct(pct) {
+  if (pct >= 40) return "critical";
+  if (pct >= 20) return "high";
+  if (pct >= 8) return "medium";
+  return "low";
+}
+
+// The real per-factory pipeline (analysis_routes.py) doesn't write into the
+// old circular-economy emission_hotspots table — that table only has rows
+// for the separate Gujarat/Mumbai/Pune demo facilities. It already computes
+// a ranked source-contribution breakdown per factory (contribution_analyses
+// .source_contributions), which is the same data the Dashboard's "Emission
+// sources ranked" table shows — reuse it here instead of showing an empty
+// page for every real factory.
+function hotspotsFromContribution(contribution) {
+  const sources = contribution?.source_contributions || [];
+  return sources.map((s, i) => {
+    const pct = Number(s.contribution_pct ?? s.percentage ?? 0);
+    return {
+      id: s.source_id || `${contribution.id}-${i}`,
+      source: s.source_name || "Unknown source",
+      process: s.source_category || contribution.emission_type_name || "Unclassified process",
+      emissions: Number(s.emission_value || 0) / 1000,
+      contribution: pct,
+      priority: priorityFromContributionPct(pct),
+      opportunityScore: Math.round(pct),
+      anomaly: contribution.primary_hotspot_source_id === s.source_id,
+      trend: "—",
+    };
+  });
+}
 
 export default function HotspotsPage() {
   const { selectedFacility } = useFacility();
@@ -28,7 +60,7 @@ export default function HotspotsPage() {
       try {
         const data = await getHotspots(selectedFacility?.id ? { facility_id: selectedFacility.id } : {});
         if (!mounted) return;
-        const normalized = (data || []).map((h) => ({
+        let normalized = (data || []).map((h) => ({
           ...h,
           opportunityScore: Number(h.opportunity_score !== undefined ? h.opportunity_score : h.opportunityScore || 0),
           emissions: Number(h.emissions || 0),
@@ -38,6 +70,16 @@ export default function HotspotsPage() {
           priority: h.priority || "low",
           trend: h.trend || "—",
         }));
+
+        // The circular-economy hotspot table has nothing for real factories
+        // (ABC Steel Works, XYZ Textile Mills, custom CSV uploads) — fall
+        // back to the real analysis pipeline's own source-contribution
+        // ranking for the selected factory instead of showing empty.
+        if (normalized.length === 0 && selectedFacility?.id) {
+          const contribution = await getFactoryContribution(selectedFacility.id);
+          if (contribution) normalized = hotspotsFromContribution(contribution);
+        }
+
         setHotspots(normalized);
         setIsLive(true);
       } catch (err) {

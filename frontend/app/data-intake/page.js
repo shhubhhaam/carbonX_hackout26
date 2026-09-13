@@ -1,19 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Database,
-  UploadCloud,
   FileSpreadsheet,
   CheckCircle2,
   Clock,
-  AlertCircle,
-  Plus,
-  ArrowRight,
-  Filter,
   Search,
-  Check,
   RefreshCw,
   FileText
 } from "lucide-react";
@@ -22,21 +16,18 @@ import MetricCard from "@/components/ui/MetricCard";
 import StatusBadge from "@/components/ui/StatusBadge";
 import DemoDisclaimer from "@/components/ui/DemoDisclaimer";
 import Tabs from "@/components/ui/Tabs";
-import { getFactoryMeasurements, getFactoryMetrics, ingestFactoryBatch } from "@/lib/api-client";
+import { getFactoryMeasurements } from "@/lib/api-client";
 import { useFacility } from "@/lib/FacilityContext";
 import { useRole } from "@/lib/RoleContext";
 
 export default function DataIntakePage() {
-  const { facilities, selectedFacility: activeFacility } = useFacility();
+  const { facilities } = useFacility();
   const { role } = useRole();
   const [activeTab, setActiveTab] = useState("Batches");
   const [search, setSearch] = useState("");
   const [selectedFacility, setSelectedFacility] = useState("all");
   const [measurements, setMeasurements] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadSuccess, setUploadSuccess] = useState(false);
-  const fileInputRef = useRef(null);
 
   useEffect(() => {
     let mounted = true;
@@ -56,58 +47,16 @@ export default function DataIntakePage() {
     return () => { mounted = false; };
   }, [facilities]);
 
-  async function handleFileUpload(event) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file || !activeFacility?.id) return;
-    setIsUploading(true);
-    try {
-      const text = await file.text();
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length < 2) throw new Error("The CSV must contain a header and at least one data row.");
-      const headers = lines[0].split(",").map((header) => header.trim().toLowerCase());
-      const dateIndex = headers.findIndex((header) => ["recorded_at", "date", "timestamp", "recorded date"].includes(header));
-      const valueIndex = headers.findIndex((header) => ["value", "numeric_value", "amount", "quantity"].includes(header));
-      const metricIndex = headers.findIndex((header) => ["metric", "metric_name", "metric name", "parameter"].includes(header));
-      if (dateIndex < 0 || valueIndex < 0 || metricIndex < 0) throw new Error("CSV needs metric, value, and recorded_at/date columns.");
-
-      const metrics = await getFactoryMetrics(activeFacility.id);
-      const metricNames = new Map(metrics.map((metric) => [metric.name.toLowerCase(), metric.name]));
-      const measurements = lines.slice(1).map((line, index) => {
-        const cells = line.split(",").map((cell) => cell.trim());
-        const metric = metricNames.get(cells[metricIndex]?.toLowerCase());
-        const value = Number(cells[valueIndex]);
-        if (!metric || !Number.isFinite(value) || !cells[dateIndex]) throw new Error(`Invalid row ${index + 2}: metric, value, or date is invalid.`);
-        return { metric_name_or_id: metric, value, recorded_at: new Date(cells[dateIndex]).toISOString() };
-      });
-      const result = await ingestFactoryBatch(activeFacility.id, measurements);
-      if (!result) throw new Error("The backend could not ingest this CSV.");
-      setUploadSuccess(true);
-      setTimeout(() => setUploadSuccess(false), 4000);
-    } catch (error) {
-      setUploadSuccess(false);
-      window.alert(error.message || "CSV upload failed.");
-    } finally {
-      setIsUploading(false);
-    }
-  }
-
-  const handleSimulateUpload = () => {
-    setIsUploading(true);
-    setTimeout(() => {
-      setIsUploading(false);
-      setUploadSuccess(true);
-      setTimeout(() => setUploadSuccess(false), 4000);
-    }, 1500);
-  };
-
   const filteredBatches = measurements.filter((b) => {
+    // These are raw measurement rows (one per metric reading), not upload
+    // batches — there's no .filename field on a measurement, only on the
+    // upload event that produced it. Match on metric name / facility / id.
     const matchSearch =
-      b.filename.toLowerCase().includes(search.toLowerCase()) ||
-      b.facility.name.toLowerCase().includes(search.toLowerCase()) ||
-      b.id.toLowerCase().includes(search.toLowerCase());
+      (b.metric_name || "").toLowerCase().includes(search.toLowerCase()) ||
+      (b.facility?.name || "").toLowerCase().includes(search.toLowerCase()) ||
+      String(b.id || "").toLowerCase().includes(search.toLowerCase());
     const matchFacility =
-      selectedFacility === "all" || b.facility.name.toLowerCase().includes(selectedFacility.toLowerCase());
+      selectedFacility === "all" || (b.facility?.name || "").toLowerCase().includes(selectedFacility.toLowerCase());
     return matchSearch && matchFacility;
   });
 
@@ -124,13 +73,11 @@ export default function DataIntakePage() {
               <RefreshCw size={14} />
               Connected Sources
             </Link>
-            {role === "SME_OWNER" && <>
-            <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleFileUpload} style={{ display: "none" }} />
-            <button onClick={() => fileInputRef.current?.click()} className="primary-button" disabled={isUploading || !activeFacility}>
-              <UploadCloud size={15} />
-              {isUploading ? "Validating & Ingesting..." : "Upload CSV"}
-            </button>
-            </>}
+            {role !== "SUSTAINABILITY_CONSULTANT" && (
+              <Link href="/facilities" className="primary-button">
+                Manage factories & upload data
+              </Link>
+            )}
           </div>
         }
       />
@@ -171,27 +118,6 @@ export default function DataIntakePage() {
         />
       </div>
 
-      {uploadSuccess && (
-        <div
-          style={{
-            background: "#edf7ee",
-            border: "1px solid #b7dfb9",
-            borderRadius: 6,
-            padding: "12px 16px",
-            marginBottom: 16,
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            color: "#1e4620",
-            fontSize: 13,
-          }}>
-          <CheckCircle2 size={18} color="#2e7d32" />
-          <span>
-            <strong>Batch successfully uploaded!</strong> 128 emission records parsed, mapped against GHG Protocol factors, and verified.
-          </span>
-        </div>
-      )}
-
       {/* Tabs */}
       <div className="panel" style={{ padding: 0, marginBottom: 20 }}>
         <Tabs
@@ -202,28 +128,26 @@ export default function DataIntakePage() {
 
         {activeTab === "Batches" && (
           <div style={{ padding: "18px 20px" }}>
-            {/* Drag & Drop simulated area */}
-            <div
-              style={{
-                border: "2px dashed #d1ded4",
-                borderRadius: 8,
-                padding: "28px 20px",
-                textAlign: "center",
-                background: "#fafcfb",
-                marginBottom: 20,
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-              }}
-              onClick={() => role === "SME_OWNER" && fileInputRef.current?.click()}
-            >
-              <UploadCloud size={32} color="#355c45" style={{ margin: "0 auto 10px" }} />
-              <div style={{ fontWeight: 600, fontSize: 14, color: "#141f18", marginBottom: 4 }}>
-                Drop a CSV activity file here
+            {role !== "SUSTAINABILITY_CONSULTANT" && (
+              <div
+                style={{
+                  border: "1px solid #d1ded4",
+                  borderRadius: 8,
+                  padding: "16px 20px",
+                  textAlign: "center",
+                  background: "#fafcfb",
+                  marginBottom: 20,
+                  fontSize: 13,
+                  color: "#4f584f",
+                }}
+              >
+                To ingest a CSV, add or select a factory on the{" "}
+                <Link href="/facilities" style={{ color: "#355c45", fontWeight: 600 }}>
+                  Facilities page →
+                </Link>{" "}
+                — naming it there keeps it correctly listed in the sidebar and facility directory.
               </div>
-              <div style={{ fontSize: 12, color: "#667066" }}>
-                Required columns: metric, value, and recorded_at/date. Columns are matched to this factory&apos;s metric definitions.
-              </div>
-            </div>
+            )}
 
             {/* Filter bar */}
             <div className="filters-bar" style={{ marginBottom: 14 }}>
@@ -258,9 +182,11 @@ export default function DataIntakePage() {
               </select>
             </div>
 
-            {/* Batches Table */}
+            {/* Batches Table — bounded box with its own scrollbar instead of
+                growing the whole page indefinitely as more rows load. */}
+            <div style={{ maxHeight: 480, overflowY: "auto", border: "1px solid #edf0ed", borderRadius: 8 }}>
             <table className="data-table">
-              <thead>
+              <thead style={{ position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
                 <tr>
                   <th>Batch ID & File</th>
                   <th>Facility</th>
@@ -306,6 +232,7 @@ export default function DataIntakePage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
 

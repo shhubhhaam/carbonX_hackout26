@@ -1,7 +1,7 @@
 "use client";
 
-import { Bell, Search } from "lucide-react";
 import { usePathname } from "next/navigation";
+import UserMenu from "./UserMenu";
 
 const BREADCRUMB_MAP = {
   "/dashboard": ["Overview", "Dashboard"],
@@ -46,13 +46,7 @@ export default function Topbar() {
       </div>
 
       <div className="topbar-actions">
-        <button className="icon-button" aria-label="Search">
-          <Search size={16} />
-        </button>
-        <button className="icon-button notification" aria-label="Notifications">
-          <Bell size={16} />
-          <span />
-        </button>
+        <UserMenu />
       </div>
     </header>
   );

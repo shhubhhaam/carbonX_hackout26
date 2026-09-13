@@ -245,7 +245,7 @@ export async function runSimulator(scenario) {
 // Real factories (Supabase-backed measurement + analysis pipeline)
 // ---------------------------------------------------------------------------
 export async function getFactories() {
-  const data = await apiFetch("/factories?cache_version=2");
+  const data = await apiFetch("/factories?cache_version=3");
   return data || [];
 }
 
@@ -264,6 +264,104 @@ export async function ingestFactoryBatch(factoryId, measurements) {
     method: "POST",
     body: JSON.stringify({ measurements }),
   });
+}
+
+export async function uploadFactoryCsv(factoryId, file, runPipeline = true) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
+  const supabase = getSupabaseBrowserClient();
+  const sessionResult = supabase ? await supabase.auth.getSession() : null;
+  const accessToken = sessionResult?.data?.session?.access_token;
+
+  const res = await fetch(`${API_BASE}/factories/${factoryId}/upload-csv?run_pipeline=${runPipeline}`, {
+    method: "POST",
+    headers: {
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Upload failed with status ${res.status}`);
+  }
+  const json = await res.json();
+  // uploadFactoryCsv uses its own fetch() (multipart body, not JSON) instead
+  // of apiFetch(), so it skips apiFetch's automatic clearApiCache()-on-write.
+  // Without this, the newly-ingested measurements are correctly saved in
+  // Supabase but every cached GET (factory measurements, and the dashboard's
+  // own per-date-range analysis cache, which shares the same "cache." key
+  // prefix) keeps serving stale pre-upload data indefinitely.
+  clearApiCache();
+  return json.data || json;
+}
+
+/**
+ * Creates a brand-new, caller-named factory and ingests a CSV into it in one
+ * step. SME Owner / Factory Operator accounts are capped at one factory —
+ * on a 409 conflict the thrown error carries `existingFactories` so the
+ * caller can offer a "delete existing, then add new" flow instead of just
+ * showing a dead-end error.
+ */
+export async function createFactoryWithCsv(factoryName, industryType, file, runPipeline = true) {
+  const formData = new FormData();
+  formData.append("factory_name", factoryName);
+  formData.append("industry_type", industryType || "Manufacturing");
+  formData.append("file", file);
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
+  const supabase = getSupabaseBrowserClient();
+  const sessionResult = supabase ? await supabase.auth.getSession() : null;
+  const accessToken = sessionResult?.data?.session?.access_token;
+
+  const res = await fetch(`${API_BASE}/factories/create-with-csv?run_pipeline=${runPipeline}`, {
+    method: "POST",
+    headers: {
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: formData,
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = json.detail;
+    const message = typeof detail === "string" ? detail : detail?.message || `Request failed with status ${res.status}`;
+    const error = new Error(message);
+    error.status = res.status;
+    error.existingFactories = typeof detail === "object" ? detail?.existing_factories : undefined;
+    throw error;
+  }
+  clearApiCache();
+  return json.data || json;
+}
+
+/**
+ * Deletes a factory and everything scoped to it. Backend-gated: every role
+ * except Sustainability Consultant may call this, still scoped to their own
+ * organization/assignment/jurisdiction.
+ */
+export async function deleteFactory(factoryId) {
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
+  const supabase = getSupabaseBrowserClient();
+  const sessionResult = supabase ? await supabase.auth.getSession() : null;
+  const accessToken = sessionResult?.data?.session?.access_token;
+
+  const res = await fetch(`${API_BASE}/factories/${factoryId}`, {
+    method: "DELETE",
+    headers: {
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = json.detail;
+    const message = typeof detail === "string" ? detail : detail?.message || `Delete failed with status ${res.status}`;
+    throw new Error(message);
+  }
+  clearApiCache();
+  return json;
 }
 
 export async function getFactoryEmissionRecords(factoryId, limit = 1000) {
@@ -298,6 +396,11 @@ export async function getFactoryContribution(factoryId) {
 
 export async function getFactoryRecommendations(factoryId, limit = 5) {
   const data = await apiFetch(`/factories/${factoryId}/recommendations?limit=${limit}`);
+  return data || [];
+}
+
+export async function getFactoryRecommendationDetail(factoryId, recId) {
+  const data = await apiFetch(`/factories/${factoryId}/recommendations/${recId}`);
   return data || [];
 }
 

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from storage_service import DataStorageService
@@ -19,10 +20,11 @@ from api.routes.auth_routes import router as auth_router
 from api.routes.circular_routes import router as circular_router
 from api.routes.dashboard_routes import router as dashboard_router
 from api.routes.metadata_routes import router as metadata_router
-from api.routes.auth_routes import get_current_user
+from api.routes.auth_routes import get_current_user, metadata_role, require_factory_manager
 from fastapi import Request, Depends
 
 load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = FastAPI(
     title="CarbonX — Carbon Intelligence & Circular Optimization Platform",
@@ -188,38 +190,88 @@ def list_factories(
     request: Request = None,
 ):
     """List only factories visible to the caller that contain measurements."""
-    conn = service.get_connection()
+    # A fresh connection per request, not the shared DataStorageService
+    # singleton — that connection is reused across every request, and this
+    # handler's `finally: conn.close()` was closing it out from under any
+    # other concurrent request still using the same connection object,
+    # surfacing as a random "cursor already closed" 500 under load.
+    conn = psycopg2.connect(DATABASE_URL)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             auth_header = request.headers.get("Authorization", "") if request else ""
             if auth_header.lower().startswith("bearer "):
                 user = get_current_user(request)
+
+                # Determine user's primary role for scope decisions
                 cur.execute(
                     """
-                    SELECT DISTINCT f.*
-                    FROM factories f
-                    JOIN user_organization_roles uor ON uor.organization_id = f.organization_id
-                                        JOIN roles assigned_role ON assigned_role.id = uor.role_id
-                                        JOIN organizations org ON org.id = f.organization_id
+                    SELECT r.name AS role_name
+                    FROM user_organization_roles uor
+                    JOIN roles r ON r.id = uor.role_id
                     WHERE uor.user_id = %s
                       AND (uor.expires_at IS NULL OR uor.expires_at > NOW())
-                                            AND (
-                                                (uor.factory_id IS NULL OR uor.factory_id = f.id)
-                                                OR (
-                                                    assigned_role.name = 'INDUSTRY_REGULATOR'
-                                                    AND EXISTS (
-                                                        SELECT 1 FROM user_jurisdictions uj
-                                                        WHERE uj.user_id = %s
-                                                            AND lower(uj.jurisdiction) = lower(COALESCE(org.settings->>'jurisdiction', org.country))
-                                                    )
-                                                )
-                                            )
-                      AND (%s IS NULL OR f.organization_id = %s)
-                      AND EXISTS (SELECT 1 FROM measurements m WHERE m.factory_id = f.id)
-                    ORDER BY f.name;
+                    ORDER BY uor.granted_at DESC
+                    LIMIT 1;
                     """,
-                                        (user.id, user.id, organization_id, organization_id),
+                    (user.id,),
                 )
+                role_row = cur.fetchone()
+                user_role = role_row["role_name"] if role_row else None
+
+                # No user_organization_roles row at all (e.g. signed up
+                # through the frontend's Supabase auth form, which never
+                # writes that row) — fall back to the role declared at
+                # signup instead of silently returning zero factories.
+                if user_role is None:
+                    user_role = metadata_role(user)
+
+                if user_role == "SUSTAINABILITY_CONSULTANT":
+                    # Consultants see ALL factories platform-wide (not scoped
+                    # to assigned client orgs — simplified per product decision).
+                    cur.execute(
+                        """
+                        SELECT DISTINCT f.*
+                        FROM factories f
+                        WHERE (%s IS NULL OR f.organization_id = %s)
+                          AND EXISTS (SELECT 1 FROM measurements m WHERE m.factory_id = f.id)
+                        ORDER BY f.name;
+                        """,
+                        (organization_id, organization_id),
+                    )
+                elif user_role == "INDUSTRY_REGULATOR":
+                    # Regulators see factories in their jurisdiction
+                    cur.execute(
+                        """
+                        SELECT DISTINCT f.*
+                        FROM factories f
+                        JOIN organizations org ON org.id = f.organization_id
+                        WHERE EXISTS (
+                            SELECT 1 FROM user_jurisdictions uj
+                            WHERE uj.user_id = %s
+                              AND lower(uj.jurisdiction) = lower(COALESCE(org.settings->>'jurisdiction', org.country))
+                        )
+                          AND (%s IS NULL OR f.organization_id = %s)
+                          AND EXISTS (SELECT 1 FROM measurements m WHERE m.factory_id = f.id)
+                        ORDER BY f.name;
+                        """,
+                        (user.id, organization_id, organization_id),
+                    )
+                else:
+                    # SME_OWNER, FACTORY_OPERATOR: see only their org's factories
+                    cur.execute(
+                        """
+                        SELECT DISTINCT f.*
+                        FROM factories f
+                        JOIN user_organization_roles uor ON uor.organization_id = f.organization_id
+                        WHERE uor.user_id = %s
+                          AND (uor.expires_at IS NULL OR uor.expires_at > NOW())
+                          AND (uor.factory_id IS NULL OR uor.factory_id = f.id)
+                          AND (%s IS NULL OR f.organization_id = %s)
+                          AND EXISTS (SELECT 1 FROM measurements m WHERE m.factory_id = f.id)
+                        ORDER BY f.name;
+                        """,
+                        (user.id, organization_id, organization_id),
+                    )
             else:
                 cur.execute(
                     """
@@ -245,10 +297,81 @@ def get_factory(code_or_id: str):
     return {"status": "success", "data": factory}
 
 
+@app.delete("/api/v1/factories/{factory_id}", tags=["Factories"])
+def delete_factory(factory_id: str, request: Request):
+    """
+    Permanently delete a factory and everything scoped to it. Gated by
+    require_factory_manager — every role except SUSTAINABILITY_CONSULTANT can
+    manage factories, but scope still applies: SME Owner / Factory Operator
+    may only delete within their own organization (Operator further limited
+    to their assigned factory), and Industry Regulator only within their
+    granted jurisdiction.
+    """
+    access = require_factory_manager(request)
+    role = access["role"]
+    organization_id = access["organization_id"]
+
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, organization_id, name FROM factories WHERE id = %s;",
+                (factory_id,),
+            )
+            factory = cur.fetchone()
+            if not factory:
+                raise HTTPException(status_code=404, detail="Factory not found.")
+
+            if role in ("SME_OWNER", "FACTORY_OPERATOR") and str(factory["organization_id"]) != str(organization_id):
+                raise HTTPException(status_code=403, detail="You can only manage factories in your own organization.")
+            if role == "FACTORY_OPERATOR" and access["assigned_factory_id"] and str(access["assigned_factory_id"]) != str(factory_id):
+                raise HTTPException(status_code=403, detail="You can only delete your assigned factory.")
+            if role == "INDUSTRY_REGULATOR":
+                cur.execute(
+                    """
+                    SELECT 1 FROM user_jurisdictions uj
+                    JOIN organizations org ON org.id = %s
+                    WHERE uj.user_id = %s
+                      AND lower(uj.jurisdiction) = lower(COALESCE(org.settings->>'jurisdiction', org.country));
+                    """,
+                    (factory["organization_id"], access["user"].id),
+                )
+                if not cur.fetchone():
+                    raise HTTPException(status_code=403, detail="This factory is outside your jurisdiction.")
+
+            # Explicit ordered delete for FK columns declared ON DELETE
+            # RESTRICT (measurements, emission_records, contribution_analyses,
+            # feature_values, model_registry, factor_contributions,
+            # recommendations) — CASCADE-declared tables (metric_definitions,
+            # emission_sources, departments, processes, machines,
+            # data_sources, feature_definitions) clean up automatically when
+            # the factory row itself is deleted below.
+            with conn.cursor() as del_cur:
+                del_cur.execute("DELETE FROM recommendations WHERE factory_id = %s;", (factory_id,))
+                del_cur.execute("DELETE FROM factor_contributions WHERE factory_id = %s;", (factory_id,))
+                del_cur.execute("DELETE FROM model_registry WHERE factory_id = %s;", (factory_id,))
+                del_cur.execute("DELETE FROM contribution_analyses WHERE factory_id = %s;", (factory_id,))
+                del_cur.execute("DELETE FROM feature_values WHERE factory_id = %s;", (factory_id,))
+                del_cur.execute("DELETE FROM emission_records WHERE factory_id = %s;", (factory_id,))
+                del_cur.execute("DELETE FROM measurements WHERE factory_id = %s;", (factory_id,))
+                del_cur.execute("UPDATE user_organization_roles SET factory_id = NULL WHERE factory_id = %s;", (factory_id,))
+                del_cur.execute("DELETE FROM factories WHERE id = %s;", (factory_id,))
+        conn.commit()
+        return {"status": "success", "deleted_factory_id": factory_id, "name": factory["name"]}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
 @app.get("/api/v1/factories/{factory_id}/emissions", tags=["Emissions"])
 def get_factory_emissions(factory_id: str, limit: int = Query(1000, ge=1, le=5000)):
     """Retrieve calculated emission records stored for a factory."""
-    conn = service.get_connection()
+    conn = psycopg2.connect(DATABASE_URL)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(

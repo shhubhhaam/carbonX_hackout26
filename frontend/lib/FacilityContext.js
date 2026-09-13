@@ -18,6 +18,12 @@ export function FacilityProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [selectedFacilityId, setSelectedFacilityIdState] = useState(() => readStored(STORAGE_KEY));
 
+  const loadFacilities = useCallback(async () => {
+    const data = await getFactories();
+    setFacilities(Array.isArray(data) ? data : []);
+    setLoading(false);
+  }, []);
+
   useEffect(() => {
     let mounted = true;
     async function load() {
@@ -48,6 +54,7 @@ export function FacilityProvider({ children }) {
         selectedFacility,
         selectedFacilityId: selectedFacility?.id ?? null,
         setSelectedFacilityId,
+        refreshFacilities: loadFacilities,
       }}
     >
       {children}

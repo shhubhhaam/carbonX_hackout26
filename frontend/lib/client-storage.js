@@ -72,3 +72,7 @@ export function clearCarbonXStorage() {
 export function analysisCacheKey(factoryId, periodStart, periodEnd) {
   return `cache.analysis.v2.${factoryId}.${periodStart}.${periodEnd}`;
 }
+
+// Shared with the dashboard's date-range picker so a CSV upload can point it
+// at the period that was actually just ingested.
+export const DASHBOARD_PERIOD_KEY = "dashboardPeriod";

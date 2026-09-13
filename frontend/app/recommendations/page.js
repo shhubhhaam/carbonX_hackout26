@@ -3,87 +3,87 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import {
-  Sparkles,
   ArrowRight,
   TrendingDown,
   DollarSign,
-  Clock,
+  Gauge,
   CheckCircle2,
   Sliders,
-  Filter,
   Search,
-  Zap,
-  Recycle,
-  GitBranch
 } from "lucide-react";
 import PageHeader from "@/components/ui/PageHeader";
 import MetricCard from "@/components/ui/MetricCard";
 import DemoDisclaimer from "@/components/ui/DemoDisclaimer";
+import { Panel } from "@/components/ui/Panel";
 import ScoreBar from "@/components/ui/ScoreBar";
-import { getRecommendations as getLocalRecommendations, getStreams as getLocalStreams } from "@/lib/demo-data/index";
+import { getFactoryRecommendations, getFactoryRecommendationDetail } from "@/lib/api-client";
+import { useFacility } from "@/lib/FacilityContext";
 
 export default function RecommendationsPage() {
-  const [recommendations, setRecommendations] = useState(getLocalRecommendations());
-  const [streams, setStreams] = useState(getLocalStreams());
+  const { selectedFacility, facilitiesLoading } = useFacility();
+  const [alternatives, setAlternatives] = useState([]);
+  const [recommendationMeta, setRecommendationMeta] = useState(null);
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [streamFilter, setStreamFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [isLive, setIsLive] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     let mounted = true;
-    async function loadRecs() {
+    async function loadRecommendations() {
+      if (!selectedFacility?.id) return;
+      setLoading(true);
+      setError(null);
       try {
-        const [recRes, stRes] = await Promise.allSettled([
-          fetch("http://127.0.0.1:8000/api/v1/circular/recommendations").then(r => r.ok ? r.json() : null),
-          fetch("http://127.0.0.1:8000/api/v1/streams").then(r => r.ok ? r.json() : null)
-        ]);
+        const summaries = await getFactoryRecommendations(selectedFacility.id, 1);
+        const latest = summaries?.[0];
+        if (!latest) {
+          if (mounted) {
+            setAlternatives([]);
+            setRecommendationMeta(null);
+            setError("No recommendations yet — run an analysis for this factory from the Dashboard first.");
+          }
+          return;
+        }
+        const detail = await getFactoryRecommendationDetail(selectedFacility.id, latest.id);
         if (!mounted) return;
-
-        if (recRes.status === "fulfilled" && recRes.value?.data && recRes.value.data.length > 0) {
-          const norm = recRes.value.data.map(r => ({
-            ...r,
-            streamId: r.stream_id || r.streamId,
-            co2Benefit: Number(r.co2_benefit !== undefined ? r.co2_benefit : r.co2Benefit || 0),
-            cost: Number(r.cost || 0),
-            savings: Number(r.savings || 0),
-            circularity: Number(r.circularity || 0),
-            feasibility: Number(r.feasibility || 0),
-            confidence: Number(r.confidence || 0)
-          }));
-          setRecommendations(norm);
-          setIsLive(true);
-        }
-        if (stRes.status === "fulfilled" && stRes.value?.data) {
-          setStreams(stRes.value.data);
-        }
+        setAlternatives(Array.isArray(detail) ? detail : []);
+        setRecommendationMeta(latest);
       } catch (err) {
         console.warn("Recommendations fetch error:", err);
+        if (mounted) setError("Couldn't load recommendations from the backend.");
       } finally {
         if (mounted) setLoading(false);
       }
     }
-    loadRecs();
+    loadRecommendations();
     return () => { mounted = false; };
-  }, []);
+  }, [selectedFacility?.id]);
 
-  const filteredRecs = recommendations.filter((r) => {
-    const sId = r.streamId || r.stream_id || "";
-    const matchCategory = categoryFilter === "all" || r.category.toLowerCase() === categoryFilter.toLowerCase();
-    const matchStream = streamFilter === "all" || sId === streamFilter;
-    const matchSearch =
-      r.title.toLowerCase().includes(search.toLowerCase()) ||
-      (r.reason && r.reason.toLowerCase().includes(search.toLowerCase())) ||
-      (r.pathway && r.pathway.toLowerCase().includes(search.toLowerCase()));
-    return matchCategory && matchStream && matchSearch;
-  });
+  const categories = ["all", ...new Set(alternatives.map((a) => (a.category || "other").toLowerCase()))];
+
+  const filtered = alternatives
+    .filter((a) => categoryFilter === "all" || (a.category || "").toLowerCase() === categoryFilter)
+    .filter(
+      (a) =>
+        (a.alternative_name || "").toLowerCase().includes(search.toLowerCase()) ||
+        (a.reasoning || "").toLowerCase().includes(search.toLowerCase()) ||
+        (a.description || "").toLowerCase().includes(search.toLowerCase())
+    )
+    .sort((a, b) => (a.rank || 0) - (b.rank || 0));
+
+  const totalReductionPct = alternatives.reduce((sum, a) => sum + Number(a.estimated_reduction_pct || 0), 0);
+  const totalCapex = alternatives.reduce((sum, a) => sum + Number(a.estimated_capex || 0), 0);
+  const avgFeasibility = alternatives.length
+    ? alternatives.reduce((sum, a) => sum + Number(a.feasibility_score || 0), 0) / alternatives.length
+    : 0;
+  const topAlternative = alternatives.find((a) => a.is_top_recommendation) || alternatives[0];
 
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <DemoDisclaimer compact />
-        {isLive && (
+        {recommendationMeta && (
           <span style={{
             display: "inline-flex",
             alignItems: "center",
@@ -97,14 +97,14 @@ export default function RecommendationsPage() {
             fontWeight: 600
           }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#2e7d32", display: "inline-block" }}></span>
-            Live MCDA Interventions: Supabase Postgres
+            MCDA-ranked · {selectedFacility?.name}
           </span>
         )}
       </div>
       <PageHeader
         eyebrow="ACT"
-        title="Decarbonization & Circular Recommendations"
-        subtitle="Ranked interventions across the 4R hierarchy (Reduce, Reuse, Recover, Process Change) with multi-criteria optimization."
+        title="Decarbonization Recommendations"
+        subtitle="MCDA-ranked reduction alternatives computed by the analysis pipeline for the selected factory."
         actions={
           <div style={{ display: "flex", gap: 10 }}>
             <Link href="/simulator" className="primary-button">
@@ -115,171 +115,151 @@ export default function RecommendationsPage() {
         }
       />
 
-      {/* KPI Cards */}
+      {/* KPI Cards — computed from the real ranked alternatives, not fixed numbers */}
       <div className="metrics-grid">
         <MetricCard
-          label="Total Potential Avoidance"
-          value="284"
-          unit="tCO₂e/yr"
+          label="Top Reduction Potential"
+          value={topAlternative ? Number(topAlternative.estimated_reduction_pct || 0).toFixed(1) : "—"}
+          unit="% of total"
           trend="down"
-          change="-18.4% facility footprint"
+          change={topAlternative?.alternative_name || "No recommendation yet"}
           icon={TrendingDown}
         />
         <MetricCard
-          label="Total Investment Capex"
-          value="$166k"
+          label="Combined Capex (all options)"
+          value={totalCapex ? (totalCapex >= 1_000_000 ? `$${(totalCapex / 1_000_000).toFixed(1)}M` : `$${(totalCapex / 1000).toFixed(1)}k`) : "—"}
           unit="USD"
           trend="neutral"
-          change="Across 4 opportunities"
+          change={`Across ${alternatives.length} option${alternatives.length === 1 ? "" : "s"}`}
           icon={DollarSign}
         />
         <MetricCard
-          label="Net Annual Cost Savings"
-          value="$89.5k"
-          unit="/ year"
+          label="Average Feasibility"
+          value={alternatives.length ? avgFeasibility.toFixed(2) : "—"}
+          unit="/ 1.0"
           trend="up"
-          change="Energy + avoided tipping fees"
-          icon={DollarSign}
+          change="Higher is easier to implement"
+          icon={Gauge}
         />
         <MetricCard
-          label="Average Payback Period"
-          value="14.2"
-          unit="months"
+          label="Top MCDA Score"
+          value={topAlternative ? Number(topAlternative.mcda_score || 0).toFixed(2) : "—"}
+          unit=""
           trend="up"
-          change="High financial return"
-          icon={Clock}
+          change={topAlternative ? "Best overall option" : "—"}
+          icon={CheckCircle2}
         />
       </div>
 
-      {/* Category Pills & Filters */}
-      <div className="filters-bar" style={{ marginBottom: 16 }}>
-        <div style={{ position: "relative" }}>
-          <Search
-            size={13}
-            style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#929a92" }}
-          />
-          <input
-            className="search-input"
-            placeholder="Search recommendations, technologies..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ paddingLeft: 30 }}
-          />
-        </div>
-
-        <button
-          onClick={() => setCategoryFilter("all")}
-          className={`filter-pill ${categoryFilter === "all" ? "active" : ""}`}
-        >
-          All (4)
-        </button>
-        <button
-          onClick={() => setCategoryFilter("recover")}
-          className={`filter-pill ${categoryFilter === "recover" ? "active" : ""}`}
-        >
-          Recover (Biogas)
-        </button>
-        <button
-          onClick={() => setCategoryFilter("reuse")}
-          className={`filter-pill ${categoryFilter === "reuse" ? "active" : ""}`}
-        >
-          Reuse (Composting)
-        </button>
-        <button
-          onClick={() => setCategoryFilter("process-change")}
-          className={`filter-pill ${categoryFilter === "process-change" ? "active" : ""}`}
-        >
-          Process Change (Biochar)
-        </button>
-        <button
-          onClick={() => setCategoryFilter("reduce")}
-          className={`filter-pill ${categoryFilter === "reduce" ? "active" : ""}`}
-        >
-          Reduce (Efficiency)
-        </button>
-
-        <select className="select-input" value={streamFilter} onChange={(e) => setStreamFilter(e.target.value)}>
-          <option value="all">All Linked Streams</option>
-          {streams.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} ({s.id})
-            </option>
+      {alternatives.length > 0 && (
+        <div className="filters-bar" style={{ marginBottom: 16 }}>
+          <div style={{ position: "relative" }}>
+            <Search
+              size={13}
+              style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#929a92" }}
+            />
+            <input
+              className="search-input"
+              placeholder="Search recommendations, technologies..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ paddingLeft: 30 }}
+            />
+          </div>
+          {categories.map((c) => (
+            <button
+              key={c}
+              onClick={() => setCategoryFilter(c)}
+              className={`filter-pill ${categoryFilter === c ? "active" : ""}`}
+              style={{ textTransform: "capitalize" }}
+            >
+              {c}
+            </button>
           ))}
-        </select>
-      </div>
+        </div>
+      )}
+
+      {!loading && (error || alternatives.length === 0) && (
+        <Panel>
+          <div style={{ padding: "32px 21px", textAlign: "center", color: "#8a968a", fontSize: 13 }}>
+            {error || `No recommendations recorded for ${selectedFacility?.name || "this facility"}.`}
+            {!facilitiesLoading && (
+              <div style={{ marginTop: 12 }}>
+                <Link href="/dashboard" className="primary-button small" style={{ display: "inline-flex" }}>
+                  Go run an analysis <ArrowRight size={13} />
+                </Link>
+              </div>
+            )}
+          </div>
+        </Panel>
+      )}
 
       {/* Recommendations List */}
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {filteredRecs.map((rec) => (
+        {filtered.map((rec, i) => (
           <div
-            key={rec.id}
+            key={`${rec.alternative_name}-${i}`}
             className="panel"
             style={{
               padding: "18px 20px",
               display: "grid",
-              gridTemplateColumns: "1.5fr 1fr 1fr 180px",
+              gridTemplateColumns: "1.6fr 1fr 1fr",
               alignItems: "center",
               gap: 20,
             }}
           >
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <span className="source-tag" style={{ textTransform: "uppercase" }}>{rec.category}</span>
-                <span style={{ fontSize: 11, color: "#8a968a" }}>ID: {rec.id} • Pathway: {rec.pathway}</span>
+                <span className="source-tag" style={{ textTransform: "uppercase" }}>{rec.category || "General"}</span>
+                <span style={{ fontSize: 11, color: "#8a968a" }}>Rank #{rec.rank}</span>
+                {rec.is_top_recommendation && (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#1b5e20" }}>★ TOP PICK</span>
+                )}
               </div>
               <h3 style={{ margin: "0 0 6px 0", fontSize: 15, fontWeight: 600, color: "#141f18" }}>
-                {rec.title}
+                {rec.alternative_name}
               </h3>
               <p style={{ margin: 0, fontSize: 12, color: "#4f584f", lineHeight: 1.5 }}>
-                {rec.reason}
+                {rec.reasoning || rec.description}
               </p>
-              <div style={{ marginTop: 8, fontSize: 11, color: "#667066" }}>
-                Linked Stream: <Link href={`/streams/${rec.streamId}`} style={{ color: "#355c45", fontWeight: 500 }}>{rec.streamId}</Link>
-              </div>
             </div>
 
             <div>
-              <div style={{ fontSize: 11, color: "#667066", marginBottom: 2 }}>GHG Avoidance</div>
+              <div style={{ fontSize: 11, color: "#667066", marginBottom: 2 }}>Emission Reduction</div>
               <div style={{ fontSize: 18, fontWeight: 700, color: "#2e7d32" }}>
-                -{rec.co2Benefit} <span style={{ fontSize: 12, fontWeight: 400 }}>tCO₂e / yr</span>
+                -{Number(rec.estimated_reduction_pct || 0).toFixed(1)}<span style={{ fontSize: 12, fontWeight: 400 }}>% of total</span>
               </div>
+              {rec.estimated_reduction_kg != null && (
+                <div style={{ fontSize: 11, color: "#8a968a", marginTop: 2 }}>
+                  {(Number(rec.estimated_reduction_kg) / 1000).toFixed(1)} tCO₂e/period
+                </div>
+              )}
               <div style={{ marginTop: 8 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                  <span>Circularity Score</span>
-                  <strong>{rec.circularity}%</strong>
+                  <span>Feasibility</span>
+                  <strong>{Number(rec.feasibility_score || 0).toFixed(2)}</strong>
                 </div>
-                <ScoreBar score={rec.circularity} max={100} color="#355c45" />
+                <ScoreBar value={Number(rec.feasibility_score || 0) * 100} max={100} size="sm" />
               </div>
             </div>
 
             <div>
-              <div style={{ fontSize: 11, color: "#667066", marginBottom: 2 }}>Financial Economics</div>
+              <div style={{ fontSize: 11, color: "#667066", marginBottom: 2 }}>Capex & Score</div>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#141f18" }}>
-                Capex: ${rec.cost.toLocaleString()}
+                {rec.estimated_capex != null ? `$${Number(rec.estimated_capex).toLocaleString()}` : "Capex not estimated"}
               </div>
-              <div style={{ fontSize: 12, color: "#2e7d32" }}>
-                Savings: +${rec.savings.toLocaleString()} / yr
+              <div style={{ fontSize: 12, color: "#355c45" }}>
+                MCDA score: {Number(rec.mcda_score || 0).toFixed(2)}
               </div>
-              <div style={{ fontSize: 11, color: "#8a968a", marginTop: 4 }}>
-                Payback: {Math.round((rec.cost / rec.savings) * 12)} months
+              <div style={{ marginTop: 10 }}>
+                <Link
+                  href="/simulator"
+                  className="secondary-button"
+                  style={{ justifyContent: "center", fontSize: 12, display: "inline-flex" }}
+                >
+                  <Sliders size={13} /> Simulate Impact
+                </Link>
               </div>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <Link
-                href={`/pathways?rec=${rec.id}`}
-                className="primary-button"
-                style={{ justifyContent: "center", fontSize: 12 }}
-              >
-                <GitBranch size={13} /> Review Pathway
-              </Link>
-              <Link
-                href={`/simulator?rec=${rec.id}`}
-                className="secondary-button"
-                style={{ justifyContent: "center", fontSize: 12 }}
-              >
-                <Sliders size={13} /> Simulate Impact
-              </Link>
             </div>
           </div>
         ))}

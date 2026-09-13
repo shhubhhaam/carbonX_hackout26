@@ -4,12 +4,17 @@ Part 10 — POST /api/v1/factories/{factory_id}/analyze
 """
 
 import os
+import re
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, UploadFile, File, Form, Request
 from pydantic import BaseModel, Field
 import psycopg2
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+
+from api.routes.auth_routes import authorize_factory_access, require_factory_manager
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -37,7 +42,7 @@ class AnalysisRequest(BaseModel):
 
 
 @router.post("/factories/{factory_id}/analyze")
-def run_analysis(factory_id: str, payload: AnalysisRequest):
+def run_analysis(factory_id: str, payload: AnalysisRequest, request: Request):
     """
     Executes the full 10-stage analysis pipeline for a factory:
 
@@ -52,6 +57,7 @@ def run_analysis(factory_id: str, payload: AnalysisRequest):
     9. Impact calculation
     10. MCDA ranking + Recommendation
     """
+    authorize_factory_access(request, factory_id, "model:predict")
     from analysis.pipeline import AnalysisPipeline
     try:
         period_start = datetime.fromisoformat(payload.period_start.replace("Z", "+00:00"))
@@ -79,8 +85,9 @@ def run_analysis(factory_id: str, payload: AnalysisRequest):
 
 
 @router.get("/factories/{factory_id}/recommendations")
-def get_recommendations(factory_id: str, limit: int = Query(5, ge=1, le=50)):
+def get_recommendations(factory_id: str, request: Request, limit: int = Query(5, ge=1, le=50)):
     """Retrieve latest recommendations for a factory."""
+    authorize_factory_access(request, factory_id, "recommendation:view")
     conn = get_conn()
     try:
         from psycopg2.extras import RealDictCursor
@@ -137,8 +144,9 @@ def get_recommendation_detail(factory_id: str, rec_id: str):
 
 
 @router.get("/factories/{factory_id}/contribution")
-def get_contribution_analysis(factory_id: str):
+def get_contribution_analysis(factory_id: str, request: Request):
     """Get the latest emission source contribution breakdown."""
+    authorize_factory_access(request, factory_id, "measurement:view")
     conn = get_conn()
     try:
         from psycopg2.extras import RealDictCursor
@@ -163,10 +171,12 @@ def get_contribution_analysis(factory_id: str):
 
 
 @router.get("/factories/{factory_id}/emissions")
-def get_emission_records(factory_id: str, limit: int = Query(1000, ge=1, le=5000)):
+def get_emission_records(factory_id: str, request: Request, limit: int = Query(1000, ge=1, le=5000)):
     """Retrieve calculated emission records stored for a factory."""
+    authorize_factory_access(request, factory_id, "measurement:view")
     conn = get_conn()
     try:
+        from psycopg2.extras import RealDictCursor
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
@@ -197,10 +207,12 @@ def get_emission_records(factory_id: str, limit: int = Query(1000, ge=1, le=5000
 @router.get("/factories/{factory_id}/features")
 def get_feature_values(
     factory_id: str,
+    request: Request,
     feature_name: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=500)
 ):
     """Retrieve computed feature values."""
+    authorize_factory_access(request, factory_id, "measurement:view")
     conn = get_conn()
     try:
         from psycopg2.extras import RealDictCursor
@@ -226,8 +238,9 @@ def get_feature_values(
 
 
 @router.get("/factories/{factory_id}/ml-attribution")
-def get_ml_attribution(factory_id: str):
+def get_ml_attribution(factory_id: str, request: Request):
     """Get the latest ML feature attribution (SHAP-based) results."""
+    authorize_factory_access(request, factory_id, "model:view_drivers")
     conn = get_conn()
     try:
         from psycopg2.extras import RealDictCursor
@@ -288,3 +301,177 @@ def list_alternatives(industry_type: Optional[str] = Query(None)):
         return {"status": "success", "count": len(rows), "data": rows}
     finally:
         conn.close()
+
+
+@router.post("/factories/create-with-csv")
+async def create_factory_with_csv(
+    request: Request,
+    factory_name: str = Form(...),
+    industry_type: str = Form("Manufacturing"),
+    file: UploadFile = File(...),
+    run_pipeline: bool = Query(True, description="Whether to run 10-stage AI analysis immediately"),
+):
+    """
+    Create a brand-new factory (named by the caller) and ingest a CSV into it
+    in one step. SME Owner and Factory Operator accounts are capped at one
+    factory each — this returns 409 with the existing factory's details if
+    the caller already has one, so the frontend can offer a
+    delete-then-add-new flow instead of silently failing.
+    """
+    access = require_factory_manager(request)
+    role = access["role"]
+    organization_id = access["organization_id"]
+    if not organization_id:
+        raise HTTPException(status_code=400, detail="No organization is associated with this account yet.")
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only .csv files are supported.")
+
+    factory_name = factory_name.strip()
+    if not factory_name:
+        raise HTTPException(status_code=400, detail="Factory name is required.")
+
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT name, slug FROM organizations WHERE id = %s;", (organization_id,))
+            org = cur.fetchone()
+            if not org:
+                raise HTTPException(status_code=404, detail="Organization not found.")
+
+            if role == "SME_OWNER":
+                cur.execute(
+                    "SELECT id, name FROM factories WHERE organization_id = %s AND is_active = TRUE;",
+                    (organization_id,),
+                )
+                existing = cur.fetchall()
+                if existing:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "message": "SME / Factory Owner accounts are limited to one factory. Delete the existing factory before adding a new one.",
+                            "existing_factories": [dict(e) for e in existing],
+                        },
+                    )
+            elif role == "FACTORY_OPERATOR" and access["assigned_factory_id"]:
+                cur.execute("SELECT id, name FROM factories WHERE id = %s;", (access["assigned_factory_id"],))
+                existing = cur.fetchone()
+                if existing:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "message": "Factory Operator accounts are limited to one assigned factory. Delete it before adding a new one.",
+                            "existing_factories": [dict(existing)],
+                        },
+                    )
+    finally:
+        conn.close()
+
+    slug_base = re.sub(r"[^a-z0-9]+", "-", factory_name.lower()).strip("-") or "factory"
+    factory_code = f"{slug_base}-{uuid.uuid4().hex[:6]}"
+
+    import tempfile
+    import shutil
+    from ingest_custom_csv import ingest_and_analyze_csv
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        result = ingest_and_analyze_csv(
+            csv_path=tmp_path,
+            factory_name=factory_name,
+            factory_code=factory_code,
+            industry_type=industry_type or "Manufacturing",
+            org_name=org["name"],
+            org_slug=org["slug"],
+            run_analysis=run_pipeline,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=422, detail=str(ve))
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"Failed to process CSV: {str(e)}\n{traceback.format_exc()}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    # A Factory Operator becomes assigned to the factory they just created.
+    if role == "FACTORY_OPERATOR":
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE user_organization_roles SET factory_id = %s
+                    WHERE user_id = %s AND organization_id = %s;
+                    """,
+                    (result["factory_id"], access["user"].id, organization_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    return {"status": "success", "data": result}
+
+
+@router.post("/factories/{factory_id}/upload-csv")
+async def upload_custom_csv(
+    factory_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    run_pipeline: bool = Query(True, description="Whether to run 10-stage AI analysis immediately"),
+):
+    """
+    Upload a custom CSV file to ingest measurements for a factory and run the 10-stage AI analysis.
+    Supports either:
+      - WIDE format: date, Production, Coal Consumption, Electricity, ...
+      - LONG format: date, metric, value
+    """
+    authorize_factory_access(request, factory_id, "measurement:write")
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only .csv files are supported.")
+
+    import tempfile
+    import shutil
+    from ingest_custom_csv import ingest_and_analyze_csv
+
+    conn = get_conn()
+    try:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT f.id, f.name, f.code, f.industry_type, o.name as org_name, o.slug as org_slug "
+                "FROM factories f JOIN organizations o ON o.id = f.organization_id WHERE f.id = %s OR f.code = %s;",
+                (factory_id, factory_id)
+            )
+            factory = cur.fetchone()
+            if not factory:
+                raise HTTPException(status_code=404, detail="Factory not found")
+    finally:
+        conn.close()
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        result = ingest_and_analyze_csv(
+            csv_path=tmp_path,
+            factory_name=factory["name"],
+            factory_code=factory["code"],
+            industry_type=factory["industry_type"],
+            org_name=factory["org_name"],
+            org_slug=factory["org_slug"],
+            run_analysis=run_pipeline,
+        )
+        return {"status": "success", "data": result}
+    except ValueError as ve:
+        raise HTTPException(status_code=422, detail=str(ve))
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"Failed to process CSV: {str(e)}\n{traceback.format_exc()}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)

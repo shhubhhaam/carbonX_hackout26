@@ -27,11 +27,10 @@ import HotspotBarChart from "@/components/charts/HotspotBarChart";
 import FacilityBarChart from "@/components/charts/FacilityBarChart";
 import { runFactoryAnalysis, getFactoryFeatureSeries } from "@/lib/api-client";
 import { useFacility } from "@/lib/FacilityContext";
-import { analysisCacheKey, readStored, writeStored } from "@/lib/client-storage";
+import { analysisCacheKey, readStored, writeStored, DASHBOARD_PERIOD_KEY } from "@/lib/client-storage";
 import { useRole } from "@/lib/RoleContext";
 
 const SOURCE_COLORS = ["#355c45", "#5d8a70", "#8bb09a", "#a3c5b0", "#c6ddce"];
-const DASHBOARD_PERIOD_KEY = "dashboardPeriod";
 
 function isoDate(d) {
   return d.toISOString().slice(0, 10);
@@ -68,18 +67,31 @@ function OperatorDashboard({ facility, report }) {
   );
 }
 
-function RegulatorDashboard() {
+function RegulatorDashboard({ facilities }) {
   return (
     <>
       <section className="hero"><div><div className="eyebrow">REGULATORY MONITORING</div><h1>Environmental performance at a glance.</h1><p>Compliance-focused visibility across authorized factories and industry trends.</p></div><div className="hero-actions"><Link href="/verified-outcomes" className="primary-button"><CheckCircle2 size={15} /> Compliance outcomes</Link></div></section>
-      <section className="facility-hero-grid"><RoleMetric label="Authorized facilities" value="—" unit="facilities" /><RoleMetric label="Threshold breaches" value="—" unit="open" /><RoleMetric label="High-risk facilities" value="—" unit="facilities" /><RoleMetric label="Industry trend" value="—" unit="" /></section>
-      <Panel><SectionHeader eyebrow="COMPLIANCE SCOPE" title="Authorized environmental data" /><div style={{ padding: "16px 21px", color: "#687168", fontSize: 12, lineHeight: 1.7 }}>Compliance status, emission thresholds, violations, and industry aggregates will appear here once regulatory access is assigned to an organization or factory.</div></Panel>
+      <section className="facility-hero-grid"><RoleMetric label="Authorized facilities" value={facilities?.length ?? "—"} unit="facilities" /><RoleMetric label="Threshold breaches" value="—" unit="open" /><RoleMetric label="High-risk facilities" value="—" unit="facilities" /><RoleMetric label="Industry trend" value="—" unit="" /></section>
+      <Panel><SectionHeader eyebrow="COMPLIANCE SCOPE" title="Authorized environmental data" />
+        {facilities?.length ? (
+          <div className="activity-list" style={{ padding: "8px 21px 16px" }}>
+            {facilities.map((f) => (
+              <div className="activity-row" key={f.id}>
+                <div className="activity-icon"><Waves size={14} /></div>
+                <div className="activity-copy"><strong>{f.name}</strong><span>{f.industry_type || f.location || f.code}</span></div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ padding: "16px 21px", color: "#687168", fontSize: 12, lineHeight: 1.7 }}>Compliance status, emission thresholds, violations, and industry aggregates will appear here once regulatory access is assigned to an organization or factory.</div>
+        )}
+      </Panel>
     </>
   );
 }
 
 export default function DashboardPage() {
-  const { selectedFacility, facilitiesLoading } = useFacility();
+  const { selectedFacility, facilitiesLoading, facilities } = useFacility();
   const { role } = useRole();
   const savedPeriod = readStored(DASHBOARD_PERIOD_KEY, {});
   const [periodStart, setPeriodStartState] = useState(() => savedPeriod.start || daysAgo(14));
@@ -99,10 +111,10 @@ export default function DashboardPage() {
     writeStored(DASHBOARD_PERIOD_KEY, { start: periodStart, end: value });
   }
 
-  async function runAnalysis(facilityId, start, end) {
+  async function runAnalysis(facilityId, start, end, forceRefresh = false) {
     if (!facilityId) return;
     const cacheKey = analysisCacheKey(facilityId, start, end);
-    const cached = readStored(cacheKey);
+    const cached = forceRefresh ? null : readStored(cacheKey);
     if (cached) {
       setReport(cached.report);
       setTrendSeries(cached.trendSeries || []);
@@ -185,7 +197,7 @@ export default function DashboardPage() {
     emissions: a.reduction_pct_of_total,
   }));
 
-  if (role === "INDUSTRY_REGULATOR") return <RegulatorDashboard />;
+  if (role === "INDUSTRY_REGULATOR") return <RegulatorDashboard facilities={facilities} />;
   if (role === "FACTORY_OPERATOR") return <OperatorDashboard facility={selectedFacility} report={report} />;
 
   return (
@@ -218,10 +230,11 @@ export default function DashboardPage() {
             </label>
           </div>
           <button
-            onClick={() => runAnalysis(selectedFacility?.id, periodStart, periodEnd)}
+            onClick={() => runAnalysis(selectedFacility?.id, periodStart, periodEnd, true)}
             disabled={loading || !selectedFacility}
             className="primary-button small"
             style={{ opacity: loading ? 0.7 : 1 }}
+            title="Always recomputes from Supabase, bypassing any cached result"
           >
             {loading ? <Loader2 size={13} className="spin" /> : <PlayCircle size={13} />}
             {loading ? "Analyzing…" : "Run analysis"}
